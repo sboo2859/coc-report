@@ -2,15 +2,55 @@ import argparse
 import glob
 import html
 import json
+import math
 import os
 from datetime import datetime, timedelta, timezone
 
 from schedule_war_snapshot import parse_coc_time
+from war_warning_message import pluralize_attack
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None
 
 
 DEFAULT_REPORT_DAYS = 7
 DEFAULT_WAR_RESULTS_DIR = "data/war_results"
 DEFAULT_SITE_OUTPUT_DIR = "site_output"
+CENTRAL_TIMEZONE_NAME = "America/Chicago"
+
+
+def central_timezone():
+    if ZoneInfo is None:
+        return timezone.utc
+
+    try:
+        return ZoneInfo(CENTRAL_TIMEZONE_NAME)
+    except Exception:
+        return timezone.utc
+
+
+def format_display_datetime(value):
+    if value is None:
+        return "Unavailable"
+
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+
+    local_value = value.astimezone(central_timezone())
+    hour_text = local_value.strftime("%I").lstrip("0") or "0"
+    return f"{local_value.strftime('%b')} {local_value.day}, {local_value.year} {hour_text}:{local_value.strftime('%M %p %Z')}"
+
+
+def parse_optional_coc_time(value):
+    if not value:
+        return None
+
+    try:
+        return parse_coc_time(value)
+    except ValueError:
+        return None
 
 
 def env_int(name, default):
@@ -53,13 +93,7 @@ def load_war_files(data_dir):
 
 def war_start_time(war):
     start_time = war.get("startTime")
-    if not start_time:
-        return None
-
-    try:
-        return parse_coc_time(start_time)
-    except ValueError:
-        return None
+    return parse_optional_coc_time(start_time)
 
 
 def war_key(war):
@@ -330,7 +364,7 @@ def format_war_date(war):
     started_at = war_start_time(war)
     if started_at is None:
         return "Unknown date"
-    return f"{started_at.strftime('%b')} {started_at.day}, {started_at.year}"
+    return format_display_datetime(started_at)
 
 
 def war_result_label(war):
@@ -463,6 +497,268 @@ def render_notes(notes):
     return f'<ul class="note-list">{"".join(items)}</ul>'
 
 
+def render_nav(active_page):
+    links = [
+        ("index.html", "Weekly Report", "weekly"),
+        ("current-war.html", "Current War", "current"),
+    ]
+    rendered_links = []
+    for href, label, page in links:
+        class_name = ' class="active"' if active_page == page else ""
+        rendered_links.append(f'<a href="{href}"{class_name}>{label}</a>')
+    return f'<nav aria-label="Site navigation">{"".join(rendered_links)}</nav>'
+
+
+def render_site_styles():
+    return """
+    :root {
+      color-scheme: light;
+      --bg: #f3f6f8;
+      --text: #17202a;
+      --muted: #657182;
+      --card: #ffffff;
+      --border: #d8e0e7;
+      --accent: #0b6b61;
+      --accent-soft: #e4f3f0;
+      --shadow: 0 10px 24px rgba(23, 32, 42, 0.08);
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      background: linear-gradient(180deg, #eaf1f4 0, var(--bg) 280px);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 32px 16px 40px;
+    }
+    nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 22px;
+    }
+    nav a {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 7px 12px;
+      background: rgba(255, 255, 255, 0.72);
+      color: var(--text);
+      font-weight: 700;
+      text-decoration: none;
+    }
+    nav a.active {
+      border-color: #badbd5;
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(1.8rem, 4vw, 3rem);
+      line-height: 1.15;
+    }
+    h2 {
+      margin: 0;
+      font-size: 1.05rem;
+      line-height: 1.25;
+    }
+    .meta {
+      margin: 0;
+      color: var(--muted);
+    }
+    .header-meta {
+      display: grid;
+      gap: 6px;
+      min-width: 220px;
+      text-align: right;
+    }
+    .period,
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #badbd5;
+      border-radius: 999px;
+      padding: 5px 10px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 700;
+    }
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .stat-card,
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+    .stat-card {
+      min-height: 130px;
+      padding: 18px;
+    }
+    .stat-label,
+    .stat-detail {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+    .stat-value {
+      margin: 8px 0;
+      font-size: 2rem;
+      font-weight: 800;
+      letter-spacing: 0;
+      line-height: 1.1;
+    }
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .card {
+      padding: 20px;
+    }
+    .wide {
+      grid-column: 1 / -1;
+    }
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .section-kicker {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+    .rank-list,
+    .note-list {
+      margin: 0;
+      padding-left: 20px;
+    }
+    .rank-list li,
+    .note-list li {
+      padding: 10px 0;
+      border-top: 1px solid var(--border);
+    }
+    .rank-list li:first-child,
+    .note-list li:first-child {
+      border-top: 0;
+    }
+    .rank-list li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .rank-list strong {
+      white-space: nowrap;
+    }
+    .empty {
+      margin: 0;
+      color: var(--muted);
+    }
+    .table-wrap {
+      width: 100%;
+      overflow-x: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 620px;
+    }
+    th,
+    td {
+      border-top: 1px solid var(--border);
+      padding: 11px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .result {
+      display: inline-flex;
+      border-radius: 999px;
+      padding: 3px 8px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 700;
+      font-size: 0.9rem;
+    }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font: inherit;
+      line-height: 1.55;
+    }
+    footer {
+      margin-top: 16px;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+    .report-card {
+      margin-top: 16px;
+    }
+    @media (max-width: 900px) {
+      header {
+        display: block;
+      }
+      .header-meta {
+        margin-top: 14px;
+        text-align: left;
+      }
+      .dashboard-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    @media (max-width: 560px) {
+      main {
+        padding: 24px 12px;
+      }
+      h1 {
+        font-size: 1.6rem;
+      }
+      .card,
+      .stat-card {
+        padding: 18px;
+      }
+      .stat-card {
+        min-height: auto;
+      }
+      .rank-list li {
+        display: block;
+      }
+      .rank-list strong {
+        display: block;
+        margin-top: 4px;
+      }
+    }
+"""
+
+
 def build_report_html(report_text, days, generated_at=None, report_data=None):
     generated_at = generated_at or datetime.now(timezone.utc)
     if report_data is None:
@@ -477,7 +773,7 @@ def build_report_html(report_text, days, generated_at=None, report_data=None):
         }
 
     escaped_report = html.escape(report_text)
-    generated_text = html.escape(generated_at.strftime("%Y-%m-%d %H:%M:%S UTC"))
+    generated_text = html.escape(format_display_datetime(generated_at))
     period_text = html.escape(f"Last {days} days")
     stat_cards = render_stat_cards(report_data)
     top_performers = render_player_list(
@@ -507,240 +803,12 @@ def build_report_html(report_text, days, generated_at=None, report_data=None):
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CoC Weekly Report</title>
   <style>
-    :root {{
-      color-scheme: light;
-      --bg: #f3f6f8;
-      --text: #17202a;
-      --muted: #657182;
-      --card: #ffffff;
-      --border: #d8e0e7;
-      --accent: #0b6b61;
-      --accent-soft: #e4f3f0;
-      --shadow: 0 10px 24px rgba(23, 32, 42, 0.08);
-    }}
-    * {{
-      box-sizing: border-box;
-    }}
-    body {{
-      margin: 0;
-      background: linear-gradient(180deg, #eaf1f4 0, var(--bg) 280px);
-      color: var(--text);
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      line-height: 1.5;
-    }}
-    main {{
-      max-width: 1120px;
-      margin: 0 auto;
-      padding: 32px 16px 40px;
-    }}
-    header {{
-      display: flex;
-      align-items: flex-end;
-      justify-content: space-between;
-      gap: 20px;
-      margin-bottom: 24px;
-    }}
-    h1 {{
-      margin: 0 0 8px;
-      font-size: clamp(1.8rem, 4vw, 3rem);
-      line-height: 1.15;
-    }}
-    h2 {{
-      margin: 0;
-      font-size: 1.05rem;
-      line-height: 1.25;
-    }}
-    .meta {{
-      margin: 0;
-      color: var(--muted);
-    }}
-    .header-meta {{
-      display: grid;
-      gap: 6px;
-      min-width: 220px;
-      text-align: right;
-    }}
-    .period {{
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      border: 1px solid #badbd5;
-      border-radius: 999px;
-      padding: 5px 10px;
-      background: var(--accent-soft);
-      color: var(--accent);
-      font-weight: 700;
-    }}
-    .stat-grid {{
-      display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
-      gap: 12px;
-      margin-bottom: 16px;
-    }}
-    .stat-card,
-    .card {{
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      box-shadow: var(--shadow);
-    }}
-    .stat-card {{
-      min-height: 130px;
-      padding: 18px;
-    }}
-    .stat-label,
-    .stat-detail {{
-      margin: 0;
-      color: var(--muted);
-      font-size: 0.88rem;
-    }}
-    .stat-value {{
-      margin: 8px 0;
-      font-size: 2rem;
-      font-weight: 800;
-      letter-spacing: 0;
-      line-height: 1.1;
-    }}
-    .dashboard-grid {{
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 16px;
-    }}
-    .card {{
-      padding: 20px;
-    }}
-    .wide {{
-      grid-column: 1 / -1;
-    }}
-    .section-head {{
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 14px;
-    }}
-    .section-kicker {{
-      margin: 0;
-      color: var(--muted);
-      font-size: 0.88rem;
-    }}
-    .rank-list,
-    .note-list {{
-      margin: 0;
-      padding-left: 20px;
-    }}
-    .rank-list li,
-    .note-list li {{
-      padding: 10px 0;
-      border-top: 1px solid var(--border);
-    }}
-    .rank-list li:first-child,
-    .note-list li:first-child {{
-      border-top: 0;
-    }}
-    .rank-list li {{
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-    }}
-    .rank-list strong {{
-      white-space: nowrap;
-    }}
-    .empty {{
-      margin: 0;
-      color: var(--muted);
-    }}
-    .table-wrap {{
-      width: 100%;
-      overflow-x: auto;
-    }}
-    table {{
-      width: 100%;
-      border-collapse: collapse;
-      min-width: 620px;
-    }}
-    th,
-    td {{
-      border-top: 1px solid var(--border);
-      padding: 11px 10px;
-      text-align: left;
-      vertical-align: top;
-    }}
-    th {{
-      color: var(--muted);
-      font-size: 0.82rem;
-      font-weight: 700;
-      text-transform: uppercase;
-    }}
-    .result {{
-      display: inline-flex;
-      border-radius: 999px;
-      padding: 3px 8px;
-      background: var(--accent-soft);
-      color: var(--accent);
-      font-weight: 700;
-      font-size: 0.9rem;
-    }}
-    pre {{
-      margin: 0;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-      font: inherit;
-      line-height: 1.55;
-    }}
-    footer {{
-      margin-top: 16px;
-      color: var(--muted);
-      font-size: 0.95rem;
-    }}
-    .report-card {{
-      margin-top: 16px;
-    }}
-    @media (max-width: 900px) {{
-      header {{
-        display: block;
-      }}
-      .header-meta {{
-        margin-top: 14px;
-        text-align: left;
-      }}
-      .stat-grid {{
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }}
-      .dashboard-grid {{
-        grid-template-columns: 1fr;
-      }}
-    }}
-    @media (max-width: 560px) {{
-      main {{
-        padding: 24px 12px;
-      }}
-      h1 {{
-        font-size: 1.6rem;
-      }}
-      .card,
-      .stat-card {{
-        padding: 18px;
-      }}
-      .stat-grid {{
-        grid-template-columns: 1fr;
-      }}
-      .stat-card {{
-        min-height: auto;
-      }}
-      .rank-list li {{
-        display: block;
-      }}
-      .rank-list strong {{
-        display: block;
-        margin-top: 4px;
-      }}
-    }}
+{render_site_styles()}
   </style>
 </head>
 <body>
   <main>
+    {render_nav("weekly")}
     <header>
       <div>
         <h1>Clash of Clans Weekly Report</h1>
@@ -804,11 +872,320 @@ def build_report_html(report_text, days, generated_at=None, report_data=None):
 """
 
 
+def safe_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def format_decimal_percent(value):
+    if isinstance(value, (int, float)):
+        return f"{float(value):.1f}%"
+    return "N/A"
+
+
+def current_war_attack_summary(war):
+    attacks_allowed = safe_int(war.get("attacksPerMember"), 2)
+    if attacks_allowed <= 0:
+        attacks_allowed = 2
+
+    members = war.get("clan", {}).get("members", [])
+    if not isinstance(members, list):
+        members = []
+
+    used_attacks = 0
+    possible_attacks = 0
+    remaining_members = []
+
+    for member in members:
+        attacks = member.get("attacks", [])
+        if not isinstance(attacks, list):
+            attacks = []
+
+        member_used = len(attacks)
+        remaining = max(0, attacks_allowed - member_used)
+        used_attacks += member_used
+        possible_attacks += attacks_allowed
+
+        if remaining:
+            remaining_members.append(
+                {
+                    "name": text_or_default(member.get("name")),
+                    "remaining": remaining,
+                    "used": member_used,
+                }
+            )
+
+    remaining_members.sort(key=lambda player: (-player["remaining"], player["name"].lower()))
+    return {
+        "attacks_allowed": attacks_allowed,
+        "used_attacks": used_attacks,
+        "possible_attacks": possible_attacks,
+        "unused_attacks": sum(player["remaining"] for player in remaining_members),
+        "remaining_members": remaining_members,
+    }
+
+
+def format_time_remaining(war, now=None):
+    state = war.get("state")
+    if state == "warEnded":
+        return "War ended"
+    if state == "preparation":
+        return "Preparation day"
+    if state != "inWar":
+        return "Unavailable"
+
+    end_time = parse_optional_coc_time(war.get("endTime"))
+    if end_time is None:
+        return "Unavailable"
+
+    now = now or datetime.now(timezone.utc)
+    minutes_left = max(0, math.ceil((end_time - now).total_seconds() / 60))
+    if minutes_left < 60:
+        return f"{minutes_left}m"
+
+    hours, minutes = divmod(minutes_left, 60)
+    return f"{hours}h {minutes}m"
+
+
+def build_current_war_warning_message(war, attack_summary=None, now=None):
+    attack_summary = attack_summary or current_war_attack_summary(war)
+    remaining_members = attack_summary["remaining_members"]
+
+    if not remaining_members:
+        return "✅ Everyone has used all available attacks."
+
+    time_left = format_time_remaining(war, now=now)
+    header = "⚠️ War reminder."
+    if war.get("state") == "inWar" and time_left != "Unavailable":
+        header = f"⚠️ War reminder — about {time_left} left."
+
+    lines = [header, "", "Still need attacks from:"]
+    for player in remaining_members:
+        lines.append(f"{player['name']} — {pluralize_attack(player['remaining'])}")
+
+    lines.extend(["", "Please use your attacks before war ends."])
+    return "\n".join(lines)
+
+
+def render_remaining_attacks(remaining_members):
+    if not remaining_members:
+        return '<p class="empty">Everyone has used all available attacks.</p>'
+
+    items = []
+    for player in remaining_members:
+        name = html.escape(player["name"])
+        detail = html.escape(pluralize_attack(player["remaining"]))
+        items.append(
+            f"""
+        <li>
+          <span>{name}</span>
+          <strong>{detail}</strong>
+        </li>"""
+        )
+
+    return f'<ol class="rank-list">\n{"".join(items)}\n      </ol>'
+
+
+def render_current_war_stat_cards(war, attack_summary, time_left):
+    clan = war.get("clan", {})
+    opponent = war.get("opponent", {})
+    cards = [
+        ("War State", text_or_default(war.get("state")), "Current API state"),
+        (
+            "Stars",
+            f"{safe_number(clan.get('stars'))}-{safe_number(opponent.get('stars'))}",
+            "Clan - opponent",
+        ),
+        (
+            "Destruction",
+            f"{format_decimal_percent(clan.get('destructionPercentage'))} / {format_decimal_percent(opponent.get('destructionPercentage'))}",
+            "Clan / opponent",
+        ),
+        (
+            "Attack Usage",
+            f"{attack_summary['used_attacks']} / {attack_summary['possible_attacks']}",
+            "Used vs possible",
+        ),
+        ("Unused Attacks", attack_summary["unused_attacks"], "Remaining attacks"),
+        ("Time Left", time_left, "Current war timer"),
+    ]
+
+    rendered_cards = []
+    for label, value, detail in cards:
+        rendered_cards.append(
+            f"""
+      <article class="stat-card">
+        <p class="stat-label">{html.escape(str(label))}</p>
+        <p class="stat-value">{html.escape(str(value))}</p>
+        <p class="stat-detail">{html.escape(str(detail))}</p>
+      </article>"""
+        )
+    return "\n".join(rendered_cards)
+
+
+def build_current_war_html(war=None, generated_at=None):
+    generated_at = generated_at or datetime.now(timezone.utc)
+    generated_text = html.escape(format_display_datetime(generated_at))
+
+    if not war:
+        title = "Current War"
+        subtitle = "Current war data unavailable."
+        state_text = "Unavailable"
+        stat_cards = render_current_war_stat_cards(
+            {"state": "unavailable", "clan": {}, "opponent": {}},
+            {
+                "used_attacks": 0,
+                "possible_attacks": 0,
+                "unused_attacks": 0,
+                "remaining_members": [],
+            },
+            "Unavailable",
+        )
+        war_timing = '<p class="empty">Current war data unavailable.</p>'
+        remaining_attacks = '<p class="empty">Current war data unavailable.</p>'
+        warning_message = "Current war data unavailable."
+    else:
+        clan = war.get("clan", {})
+        opponent = war.get("opponent", {})
+        clan_name = text_or_default(clan.get("name"), "Clan")
+        opponent_name = text_or_default(opponent.get("name"), "Opponent")
+        title = f"{clan_name} vs {opponent_name}"
+        subtitle = "Live current war snapshot captured at build time."
+        state_text = text_or_default(war.get("state"))
+        attack_summary = current_war_attack_summary(war)
+        time_left = format_time_remaining(war, now=generated_at)
+        stat_cards = render_current_war_stat_cards(war, attack_summary, time_left)
+        start_text = html.escape(format_display_datetime(parse_optional_coc_time(war.get("startTime"))))
+        end_text = html.escape(format_display_datetime(parse_optional_coc_time(war.get("endTime"))))
+        war_timing = f"""
+        <dl>
+          <div>
+            <dt>Start Time</dt>
+            <dd>{start_text}</dd>
+          </div>
+          <div>
+            <dt>End Time</dt>
+            <dd>{end_text}</dd>
+          </div>
+          <div>
+            <dt>Time Remaining</dt>
+            <dd>{html.escape(time_left)}</dd>
+          </div>
+        </dl>"""
+        remaining_attacks = render_remaining_attacks(attack_summary["remaining_members"])
+        warning_message = build_current_war_warning_message(war, attack_summary=attack_summary, now=generated_at)
+
+    escaped_title = html.escape(title)
+    escaped_subtitle = html.escape(subtitle)
+    escaped_state = html.escape(state_text)
+    escaped_warning = html.escape(warning_message)
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CoC Current War</title>
+  <style>
+{render_site_styles()}
+    dl {{
+      display: grid;
+      gap: 12px;
+      margin: 0;
+    }}
+    dl div {{
+      display: grid;
+      gap: 3px;
+      border-top: 1px solid var(--border);
+      padding-top: 12px;
+    }}
+    dl div:first-child {{
+      border-top: 0;
+      padding-top: 0;
+    }}
+    dt {{
+      color: var(--muted);
+      font-size: 0.88rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }}
+    dd {{
+      margin: 0;
+      font-weight: 700;
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    {render_nav("current")}
+    <header>
+      <div>
+        <h1>Current War</h1>
+        <p class="meta">{escaped_subtitle}</p>
+      </div>
+      <div class="header-meta" aria-label="Current war metadata">
+        <p class="meta">Generated: {generated_text}</p>
+        <p class="meta">War state: <span class="status-pill">{escaped_state}</span></p>
+      </div>
+    </header>
+
+    <section class="card report-card" aria-label="Current war matchup">
+      <div class="section-head">
+        <h2>{escaped_title}</h2>
+      </div>
+    </section>
+
+    <section class="stat-grid" aria-label="Current war statistics">
+{stat_cards}
+    </section>
+
+    <section class="dashboard-grid" aria-label="Current war details">
+      <article class="card">
+        <div class="section-head">
+          <h2>War Timing</h2>
+        </div>
+        {war_timing}
+      </article>
+
+      <article class="card">
+        <div class="section-head">
+          <h2>Members With Attacks</h2>
+          <p class="section-kicker">Remaining first</p>
+        </div>
+        {remaining_attacks}
+      </article>
+    </section>
+
+    <section class="card report-card" aria-label="Copy paste warning message">
+      <div class="section-head">
+        <h2>Copy/Paste Warning</h2>
+      </div>
+      <pre>{escaped_warning}</pre>
+    </section>
+    <footer>
+      Current war page is static and reflects the latest rebuild.
+    </footer>
+  </main>
+</body>
+</html>
+"""
+
+
 def write_site(report_text, days, output_dir=DEFAULT_SITE_OUTPUT_DIR, report_data=None):
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, "index.html")
     with open(output_path, "w") as f:
         f.write(build_report_html(report_text, days, report_data=report_data))
+    return output_path
+
+
+def write_current_war_site(war=None, output_dir=DEFAULT_SITE_OUTPUT_DIR):
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, "current-war.html")
+    with open(output_path, "w") as f:
+        f.write(build_current_war_html(war=war))
     return output_path
 
 

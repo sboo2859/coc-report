@@ -111,7 +111,7 @@ The static site flow:
 
 1. Reads local JSON files from `data/war_results/`.
 2. Builds the same weekly report text used by terminal output.
-3. Escapes the report text for safe HTML insertion.
+3. Builds a self-contained dashboard and keeps the copy/paste text report.
 4. Writes `site_output/index.html`.
 5. The generated file can be committed and pushed to GitHub.
 6. Cloudflare Pages serves `site_output/` as a no-framework static site.
@@ -120,4 +120,32 @@ This flow is:
 
 ```text
 local snapshots -> weekly_report.py/build_site.py -> site_output/index.html -> GitHub -> Cloudflare Pages
+```
+
+Displayed site timestamps are converted to Central Time with `ZoneInfo("America/Chicago")` when available.
+
+## Static Current War Flow
+
+Run:
+
+```bash
+python3 build_site.py --include-current-war
+```
+
+The command always builds the weekly report. It then attempts one live API call for the current war.
+
+If the API call succeeds:
+
+1. Fetch the live `currentwar` response through `fetch_current_war()`.
+2. Calculate used attacks, possible attacks, unused attacks, and members with remaining attacks.
+3. Parse start and end times and display them in Central Time.
+4. Calculate time remaining when `state == "inWar"`.
+5. Write `site_output/current-war.html`.
+
+If the API token is missing or the API call fails, the command still writes `site_output/current-war.html` with a "Current war data unavailable" message.
+
+This flow is:
+
+```text
+Clash API -> build_site.py --include-current-war -> current-war.html -> GitHub -> Cloudflare Pages
 ```

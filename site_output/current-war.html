@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CoC Weekly Report</title>
+  <title>CoC Current War</title>
   <style>
 
     :root {
@@ -252,96 +252,117 @@
       }
     }
 
+    dl {
+      display: grid;
+      gap: 12px;
+      margin: 0;
+    }
+    dl div {
+      display: grid;
+      gap: 3px;
+      border-top: 1px solid var(--border);
+      padding-top: 12px;
+    }
+    dl div:first-child {
+      border-top: 0;
+      padding-top: 0;
+    }
+    dt {
+      color: var(--muted);
+      font-size: 0.88rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    dd {
+      margin: 0;
+      font-weight: 700;
+    }
   </style>
 </head>
 <body>
   <main>
-    <nav aria-label="Site navigation"><a href="index.html" class="active">Weekly Report</a><a href="current-war.html">Current War</a></nav>
+    <nav aria-label="Site navigation"><a href="index.html">Weekly Report</a><a href="current-war.html" class="active">Current War</a></nav>
     <header>
       <div>
-        <h1>Clash of Clans Weekly Report</h1>
-        <p class="meta">Static dashboard generated from saved war snapshots.</p>
+        <h1>Current War</h1>
+        <p class="meta">Current war data unavailable.</p>
       </div>
-      <div class="header-meta" aria-label="Report metadata">
+      <div class="header-meta" aria-label="Current war metadata">
         <p class="meta">Generated: Apr 26, 2026 3:07 PM CDT</p>
-        <p class="meta">Report period: <span class="period">Last 7 days</span></p>
+        <p class="meta">War state: <span class="status-pill">Unavailable</span></p>
       </div>
     </header>
 
-    <section class="stat-grid" aria-label="Report statistics">
+    <section class="card report-card" aria-label="Current war matchup">
+      <div class="section-head">
+        <h2>Current War</h2>
+      </div>
+    </section>
+
+    <section class="stat-grid" aria-label="Current war statistics">
 
       <article class="stat-card">
-        <p class="stat-label">Wars</p>
-        <p class="stat-value">0</p>
-        <p class="stat-detail">Last 7 days</p>
+        <p class="stat-label">War State</p>
+        <p class="stat-value">unavailable</p>
+        <p class="stat-detail">Current API state</p>
       </article>
 
       <article class="stat-card">
-        <p class="stat-label">Record</p>
-        <p class="stat-value">0W - 0L</p>
-        <p class="stat-detail">Wins - losses - ties</p>
+        <p class="stat-label">Stars</p>
+        <p class="stat-value">0-0</p>
+        <p class="stat-detail">Clan - opponent</p>
+      </article>
+
+      <article class="stat-card">
+        <p class="stat-label">Destruction</p>
+        <p class="stat-value">N/A / N/A</p>
+        <p class="stat-detail">Clan / opponent</p>
       </article>
 
       <article class="stat-card">
         <p class="stat-label">Attack Usage</p>
-        <p class="stat-value">0%</p>
-        <p class="stat-detail">No attacks tracked</p>
+        <p class="stat-value">0 / 0</p>
+        <p class="stat-detail">Used vs possible</p>
       </article>
 
       <article class="stat-card">
         <p class="stat-label">Unused Attacks</p>
         <p class="stat-value">0</p>
-        <p class="stat-detail">Missed available attacks</p>
+        <p class="stat-detail">Remaining attacks</p>
       </article>
 
       <article class="stat-card">
-        <p class="stat-label">Total Stars</p>
-        <p class="stat-value">0</p>
-        <p class="stat-detail">0.0 per war</p>
+        <p class="stat-label">Time Left</p>
+        <p class="stat-value">Unavailable</p>
+        <p class="stat-detail">Current war timer</p>
       </article>
     </section>
 
-    <section class="dashboard-grid" aria-label="Report details">
+    <section class="dashboard-grid" aria-label="Current war details">
       <article class="card">
         <div class="section-head">
-          <h2>Top Performers</h2>
-          <p class="section-kicker">By stars</p>
+          <h2>War Timing</h2>
         </div>
-        <p class="empty">No top performers yet.</p>
+        <p class="empty">Current war data unavailable.</p>
       </article>
 
       <article class="card">
         <div class="section-head">
-          <h2>Missed Attacks</h2>
-          <p class="section-kicker">Needs follow-up</p>
+          <h2>Members With Attacks</h2>
+          <p class="section-kicker">Remaining first</p>
         </div>
-        <p class="empty">No missed attacks tracked.</p>
-      </article>
-
-      <article class="card wide">
-        <div class="section-head">
-          <h2>Recent Wars</h2>
-          <p class="section-kicker">Latest completed snapshots</p>
-        </div>
-        <p class="empty">No completed wars are available for this report period.</p>
-      </article>
-
-      <article class="card wide">
-        <div class="section-head">
-          <h2>Notes</h2>
-        </div>
-        <ul class="note-list"><li>No completed war snapshots found for this report period</li></ul>
+        <p class="empty">Current war data unavailable.</p>
       </article>
     </section>
 
-    <section class="card report-card" aria-label="Copy paste report text">
+    <section class="card report-card" aria-label="Copy paste warning message">
       <div class="section-head">
-        <h2>Copy/Paste Report</h2>
+        <h2>Copy/Paste Warning</h2>
       </div>
-      <pre>No war data available for the selected period.</pre>
+      <pre>Current war data unavailable.</pre>
     </section>
     <footer>
-      Report generated from local saved war snapshots.
+      Current war page is static and reflects the latest rebuild.
     </footer>
   </main>
 </body>

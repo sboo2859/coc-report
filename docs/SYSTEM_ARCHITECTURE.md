@@ -21,7 +21,7 @@ It is intentionally script-based and file-based. That keeps the project easy to 
 
 `weekly_report.py` reads saved final snapshots from `data/war_results/` and builds a weekly performance report. It does not call the Clash API.
 
-`build_site.py` generates a static HTML version of the weekly report under `site_output/` for Cloudflare Pages.
+`build_site.py` generates static HTML under `site_output/` for Cloudflare Pages. By default it writes only the weekly report. With `--include-current-war`, it also fetches the live current war and writes a static current-war dashboard.
 
 ## Data Flow
 
@@ -57,6 +57,17 @@ Clash API
    |
    v
 war_warning_message.py             live copy/paste reminder
+
+Clash API
+   |
+   v
+build_site.py --include-current-war
+   |
+   v
+site_output/current-war.html
+   |
+   v
+GitHub -> Cloudflare Pages
 ```
 
 ## How Components Interact
@@ -68,6 +79,10 @@ The scheduler imports both `fetch_current_war()` and `save_war_snapshot()`. It a
 The weekly report does not depend on live API access. Its input is the durable JSON output from the scheduler.
 
 The static site generator wraps the same weekly report logic in self-contained HTML. The generated `site_output/index.html` is committed to GitHub so Cloudflare Pages can deploy it without running Python.
+
+When `build_site.py --include-current-war` is used, `build_site.py` calls `fetch_current_war()` once at build time. If the API call succeeds, `site_output/current-war.html` contains the current state, timing, attack usage, remaining attacks, and a copy/paste warning message. If the token is missing or the API fails, the page is still generated with an unavailable-data message.
+
+Displayed site timestamps are formatted in Central Time using `ZoneInfo("America/Chicago")` when available, with a UTC fallback if Python cannot load zoneinfo.
 
 ## Design Principles
 

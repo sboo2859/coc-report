@@ -38,6 +38,12 @@ Generate the static report site:
 python3 build_site.py
 ```
 
+Generate the static report site and current-war page:
+
+```bash
+python3 build_site.py --include-current-war
+```
+
 ## Scheduler (Background)
 
 Run the scheduler in the foreground:
@@ -120,6 +126,21 @@ This writes:
 site_output/index.html
 ```
 
+To include current war status, build with API access:
+
+```bash
+python3 build_site.py --include-current-war
+```
+
+This writes:
+
+```text
+site_output/index.html
+site_output/current-war.html
+```
+
+The weekly report page reads saved snapshots only. The current-war page requires `COC_API_TOKEN` for the live API call; if the token is missing or the API call fails, the page is still generated with an unavailable-data message.
+
 Commit and push the generated page:
 
 ```bash
@@ -127,6 +148,10 @@ git add site_output/index.html
 git commit -m "Update weekly report site"
 git push
 ```
+
+If you built with `--include-current-war`, also add `site_output/current-war.html` before committing.
+
+The site is static. Cloudflare Pages updates only after the generated HTML is committed and pushed.
 
 Cloudflare Pages settings:
 
@@ -164,3 +189,7 @@ Malformed JSON in `data/war_results/` is skipped by `weekly_report.py`. Remove o
 Missing or empty static report:
 
 Run `python3 build_site.py` again and confirm `site_output/index.html` exists. If the page says no war data is available, check that final snapshots exist in `data/war_results/` and are inside the selected report period.
+
+Current war page unavailable:
+
+Run `python3 build_site.py --include-current-war` with `COC_API_TOKEN` set. If `site_output/current-war.html` still says current war data is unavailable, verify the token, IP allowlist, clan tag, and Clash API availability.

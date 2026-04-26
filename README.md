@@ -137,6 +137,21 @@ This writes:
 site_output/index.html
 ```
 
+Optionally include a static current-war page from the live Clash API:
+
+```bash
+python3 build_site.py --include-current-war
+```
+
+This writes:
+
+```text
+site_output/index.html
+site_output/current-war.html
+```
+
+The weekly report uses saved final snapshots from `data/war_results/` and does not require API access. The current-war page requires `COC_API_TOKEN` at build time. If the token is missing or the API call fails, the build still writes `current-war.html` with an unavailable-data message.
+
 You can also generate the site directly from the report script:
 
 ```bash
@@ -150,6 +165,14 @@ git add site_output/index.html
 git commit -m "Update weekly report site"
 git push
 ```
+
+If you generated the current-war page, include it in the same commit:
+
+```bash
+git add site_output/current-war.html
+```
+
+The site is static. Cloudflare Pages serves the committed files and only updates after you rebuild locally, commit the generated HTML, and push.
 
 ### Cloudflare Pages setup
 
