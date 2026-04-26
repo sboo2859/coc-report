@@ -1,9 +1,13 @@
-from weekly_report import generate_weekly_report_text, write_site
+from weekly_report import generate_weekly_report_data, write_site
 
 
 def main():
-    report_text, days = generate_weekly_report_text()
-    output_path = write_site(report_text, days)
+    report_data = generate_weekly_report_data()
+    output_path = write_site(
+        report_data["report_text"],
+        report_data["days"],
+        report_data=report_data,
+    )
     print(f"Wrote static report site: {output_path}")
 
 
