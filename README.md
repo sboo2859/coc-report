@@ -123,6 +123,45 @@ Notes:
 
 The report reads local JSON files only. It does not call the Clash API.
 
+## Static Report Site
+
+Generate the static report site:
+
+```bash
+python3 build_site.py
+```
+
+This writes:
+
+```text
+site_output/index.html
+```
+
+You can also generate the site directly from the report script:
+
+```bash
+python3 weekly_report.py --site
+```
+
+Commit and push the generated site:
+
+```bash
+git add site_output/index.html
+git commit -m "Update weekly report site"
+git push
+```
+
+### Cloudflare Pages setup
+
+Use:
+
+- Framework preset: None
+- Build command: leave blank
+- Build output directory: `site_output`
+- Production branch: `main`
+
+Cloudflare Pages will redeploy when GitHub receives a new push.
+
 ## Scheduler Settings
 
 These environment variables are optional:

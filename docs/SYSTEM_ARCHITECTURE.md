@@ -21,6 +21,8 @@ It is intentionally script-based and file-based. That keeps the project easy to 
 
 `weekly_report.py` reads saved final snapshots from `data/war_results/` and builds a weekly performance report. It does not call the Clash API.
 
+`build_site.py` generates a static HTML version of the weekly report under `site_output/` for Cloudflare Pages.
+
 ## Data Flow
 
 ```text
@@ -41,6 +43,15 @@ data/war_results/                  final war snapshots
    |
    v
 weekly_report.py
+   |
+   v
+build_site.py / weekly_report.py --site
+   |
+   v
+site_output/index.html
+   |
+   v
+GitHub -> Cloudflare Pages
 
 Clash API
    |
@@ -55,6 +66,8 @@ war_warning_message.py             live copy/paste reminder
 The scheduler imports both `fetch_current_war()` and `save_war_snapshot()`. It adds scheduling, dedupe, and final-result timing around those reusable helpers.
 
 The weekly report does not depend on live API access. Its input is the durable JSON output from the scheduler.
+
+The static site generator wraps the same weekly report logic in self-contained HTML. The generated `site_output/index.html` is committed to GitHub so Cloudflare Pages can deploy it without running Python.
 
 ## Design Principles
 
@@ -71,3 +84,5 @@ The final snapshot is taken after `endTime` plus a buffer because the API may ne
 Manual snapshots and final snapshots are stored separately. `data/wars/` is useful for ad hoc inspection; `data/war_results/` is the historical source for reports.
 
 Warnings are generated as text instead of sent automatically because Clash chat tagging and notification behavior cannot be safely automated through this project.
+
+Static publishing is generated locally instead of built on Cloudflare. This keeps Cloudflare Pages setup simple: it only serves the committed `site_output/` folder.

@@ -1,5 +1,6 @@
 import argparse
 import glob
+import html
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -9,6 +10,7 @@ from schedule_war_snapshot import parse_coc_time
 
 DEFAULT_REPORT_DAYS = 7
 DEFAULT_WAR_RESULTS_DIR = "data/war_results"
+DEFAULT_SITE_OUTPUT_DIR = "site_output"
 
 
 def env_int(name, default):
@@ -280,21 +282,143 @@ def build_report(totals, days):
     return "\n".join(lines)
 
 
+def generate_weekly_report_text(days=None, data_dir=DEFAULT_WAR_RESULTS_DIR):
+    report_days = days if days and days > 0 else env_int("REPORT_DAYS", DEFAULT_REPORT_DAYS)
+    loaded_wars = load_war_files(data_dir)
+    recent_wars = filter_recent_wars(loaded_wars, report_days)
+    totals = aggregate_wars(recent_wars)
+    return build_report(totals, report_days), report_days
+
+
+def build_report_html(report_text, days, generated_at=None):
+    generated_at = generated_at or datetime.now(timezone.utc)
+    escaped_report = html.escape(report_text)
+    generated_text = html.escape(generated_at.strftime("%Y-%m-%d %H:%M:%S UTC"))
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CoC Weekly Report</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      --bg: #f5f7fa;
+      --text: #111827;
+      --muted: #5b6472;
+      --card: #ffffff;
+      --border: #d9e0ea;
+      --accent: #0f766e;
+    }}
+    * {{
+      box-sizing: border-box;
+    }}
+    body {{
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }}
+    main {{
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 32px 16px;
+    }}
+    header {{
+      margin-bottom: 20px;
+    }}
+    h1 {{
+      margin: 0 0 8px;
+      font-size: 2rem;
+      line-height: 1.15;
+    }}
+    .meta {{
+      margin: 0;
+      color: var(--muted);
+    }}
+    .card {{
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+    }}
+    pre {{
+      margin: 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font: inherit;
+      line-height: 1.55;
+    }}
+    footer {{
+      margin-top: 16px;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }}
+    .period {{
+      color: var(--accent);
+      font-weight: 700;
+    }}
+    @media (max-width: 560px) {{
+      main {{
+        padding: 24px 12px;
+      }}
+      h1 {{
+        font-size: 1.6rem;
+      }}
+      .card {{
+        padding: 18px;
+      }}
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Clash of Clans Weekly Report</h1>
+      <p class="meta">Generated: {generated_text}</p>
+      <p class="meta">Report period: <span class="period">Last {days} days</span></p>
+    </header>
+    <section class="card" aria-label="Weekly report text">
+      <pre>{escaped_report}</pre>
+    </section>
+    <footer>
+      Report generated from local saved war snapshots.
+    </footer>
+  </main>
+</body>
+</html>
+"""
+
+
+def write_site(report_text, days, output_dir=DEFAULT_SITE_OUTPUT_DIR):
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, "index.html")
+    with open(output_path, "w") as f:
+        f.write(build_report_html(report_text, days))
+    return output_path
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate a weekly war report from saved snapshots.")
     parser.add_argument("--days", type=int, help="Number of recent days to include.")
     parser.add_argument("--data-dir", default=DEFAULT_WAR_RESULTS_DIR, help="Directory containing war result JSON files.")
+    parser.add_argument("--site", action="store_true", help="Write site_output/index.html.")
+    parser.add_argument("--output-dir", default=DEFAULT_SITE_OUTPUT_DIR, help="Directory for --site output.")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    days = args.days if args.days and args.days > 0 else env_int("REPORT_DAYS", DEFAULT_REPORT_DAYS)
+    report_text, days = generate_weekly_report_text(days=args.days, data_dir=args.data_dir)
 
-    loaded_wars = load_war_files(args.data_dir)
-    recent_wars = filter_recent_wars(loaded_wars, days)
-    totals = aggregate_wars(recent_wars)
-    print(build_report(totals, days))
+    if args.site:
+        output_path = write_site(report_text, days, output_dir=args.output_dir)
+        print(f"Wrote static report site: {output_path}")
+    else:
+        print(report_text)
 
 
 if __name__ == "__main__":

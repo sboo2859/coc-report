@@ -32,6 +32,12 @@ Generate a weekly report from saved final snapshots:
 python3 weekly_report.py
 ```
 
+Generate the static report site:
+
+```bash
+python3 build_site.py
+```
+
 ## Scheduler (Background)
 
 Run the scheduler in the foreground:
@@ -100,6 +106,39 @@ Weekly report:
 REPORT_DAYS=7
 ```
 
+## Static Site Publishing
+
+Build the static site locally:
+
+```bash
+python3 build_site.py
+```
+
+This writes:
+
+```text
+site_output/index.html
+```
+
+Commit and push the generated page:
+
+```bash
+git add site_output/index.html
+git commit -m "Update weekly report site"
+git push
+```
+
+Cloudflare Pages settings:
+
+```text
+Framework preset: None
+Build command: leave blank
+Build output directory: site_output
+Production branch: main
+```
+
+Cloudflare Pages redeploys when GitHub receives a new push.
+
 ## Troubleshooting
 
 Missing token:
@@ -121,3 +160,7 @@ Check that final snapshots exist in `data/war_results/` and that their `startTim
 API access errors may happen if the Clash API token is invalid, expired, restricted by IP allowlist, or the clan war log is private. The scheduler logs these errors and retries later.
 
 Malformed JSON in `data/war_results/` is skipped by `weekly_report.py`. Remove or repair the file if it should be counted.
+
+Missing or empty static report:
+
+Run `python3 build_site.py` again and confirm `site_output/index.html` exists. If the page says no war data is available, check that final snapshots exist in `data/war_results/` and are inside the selected report period.

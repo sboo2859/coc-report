@@ -92,3 +92,32 @@ The script:
 6. Prints a copy/paste-ready report.
 
 Weekly reporting never calls the Clash API. This makes it safe to run anytime, even without an API token.
+
+## Static Site Flow
+
+Run:
+
+```bash
+python3 build_site.py
+```
+
+or:
+
+```bash
+python3 weekly_report.py --site
+```
+
+The static site flow:
+
+1. Reads local JSON files from `data/war_results/`.
+2. Builds the same weekly report text used by terminal output.
+3. Escapes the report text for safe HTML insertion.
+4. Writes `site_output/index.html`.
+5. The generated file can be committed and pushed to GitHub.
+6. Cloudflare Pages serves `site_output/` as a no-framework static site.
+
+This flow is:
+
+```text
+local snapshots -> weekly_report.py/build_site.py -> site_output/index.html -> GitHub -> Cloudflare Pages
+```
