@@ -1,7 +1,7 @@
 import argparse
 
 from fetch_war import fetch_current_war
-from weekly_report import generate_weekly_report_data, write_current_war_site, write_site
+from weekly_report import generate_weekly_report_data, write_current_war_site, write_history_site, write_site
 
 
 def parse_args():
@@ -33,6 +33,9 @@ def main():
         report_data=report_data,
     )
     print(f"Wrote static report site: {output_path}")
+
+    history_path = write_history_site()
+    print(f"Wrote total history site: {history_path}")
 
     if args.include_current_war:
         current_war = fetch_current_war_for_site()

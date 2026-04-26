@@ -113,6 +113,24 @@ def safe_number(value, default=0):
     return default
 
 
+def optional_number(value):
+    return value if isinstance(value, (int, float)) else None
+
+
+def get_attacks_allowed(war):
+    attacks_allowed = war.get("attacksPerMember", 2)
+    if not isinstance(attacks_allowed, int) or attacks_allowed <= 0:
+        return 2
+    return attacks_allowed
+
+
+def member_attacks(member):
+    attacks = member.get("attacks", [])
+    if not isinstance(attacks, list):
+        return []
+    return attacks
+
+
 def player_record(stats, member):
     tag = member.get("tag") or member.get("name") or "Unknown"
     name = member.get("name") or "Unknown"
@@ -120,12 +138,47 @@ def player_record(stats, member):
     if tag not in stats:
         stats[tag] = {
             "name": name,
+            "tag": tag,
+            "role": text_or_default(member.get("role"), "N/A"),
+            "town_hall": member.get("townHallLevel"),
+            "trophies": member.get("trophies"),
+            "donations": member.get("donations"),
+            "donations_received": member.get("donationsReceived"),
+            "first_donations": optional_number(member.get("donations")),
+            "last_donations": optional_number(member.get("donations")),
+            "first_donations_received": optional_number(member.get("donationsReceived")),
+            "last_donations_received": optional_number(member.get("donationsReceived")),
+            "wars_participated": 0,
+            "possible_attacks": 0,
             "stars": 0,
             "attacks_used": 0,
             "attacks_missed": 0,
+            "destruction": 0.0,
+            "destruction_count": 0,
         }
     elif name != "Unknown":
         stats[tag]["name"] = name
+
+    for field in ("role", "townHallLevel", "trophies", "donations", "donationsReceived"):
+        value = member.get(field)
+        if value is None:
+            continue
+        if field == "townHallLevel":
+            stats[tag]["town_hall"] = value
+        elif field == "donationsReceived":
+            stats[tag]["donations_received"] = value
+            if isinstance(value, (int, float)):
+                if stats[tag]["first_donations_received"] is None:
+                    stats[tag]["first_donations_received"] = value
+                stats[tag]["last_donations_received"] = value
+        elif field == "donations":
+            stats[tag]["donations"] = value
+            if isinstance(value, (int, float)):
+                if stats[tag]["first_donations"] is None:
+                    stats[tag]["first_donations"] = value
+                stats[tag]["last_donations"] = value
+        else:
+            stats[tag][field] = value
 
     return stats[tag]
 
@@ -143,9 +196,13 @@ def aggregate_wars(wars):
         "destruction": 0.0,
         "destruction_count": 0,
         "players": {},
+        "war_summaries": [],
     }
 
-    for _path, war in wars:
+    fallback_date = datetime.min.replace(tzinfo=timezone.utc)
+    sorted_wars = sorted(wars, key=lambda item: war_start_time(item[1]) or fallback_date)
+
+    for _path, war in sorted_wars:
         totals["wars"] += 1
 
         clan = war.get("clan", {})
@@ -165,34 +222,56 @@ def aggregate_wars(wars):
             totals["destruction"] += float(destruction)
             totals["destruction_count"] += 1
 
-        attacks_allowed = war.get("attacksPerMember", 2)
-        if not isinstance(attacks_allowed, int):
-            attacks_allowed = 2
+        attacks_allowed = get_attacks_allowed(war)
 
         members = clan.get("members", [])
         if not isinstance(members, list):
             members = []
 
+        war_used_attacks = 0
+        war_possible_attacks = len(members) * attacks_allowed
+
         for member in members:
             record = player_record(totals["players"], member)
-            attacks = member.get("attacks", [])
-            if not isinstance(attacks, list):
-                attacks = []
+            attacks = member_attacks(member)
 
             used_attacks = len(attacks)
             missed_attacks = max(0, attacks_allowed - used_attacks)
+            war_used_attacks += used_attacks
 
             totals["possible_attacks"] += attacks_allowed
             totals["used_attacks"] += used_attacks
             totals["unused_attacks"] += missed_attacks
 
+            record["wars_participated"] += 1
+            record["possible_attacks"] += attacks_allowed
             record["attacks_used"] += used_attacks
             record["attacks_missed"] += missed_attacks
 
             for attack in attacks:
                 stars = safe_number(attack.get("stars"))
-                totals["stars"] += stars
                 record["stars"] += stars
+                attack_destruction = attack.get("destructionPercentage")
+                if isinstance(attack_destruction, (int, float)):
+                    record["destruction"] += float(attack_destruction)
+                    record["destruction_count"] += 1
+
+        totals["stars"] += clan_stars
+        totals["war_summaries"].append(
+            {
+                "date": format_war_date(war),
+                "opponent": text_or_default(opponent.get("name"), "Opponent"),
+                "result": war_result_label(war),
+                "team_size": len(members),
+                "clan_stars": clan_stars,
+                "opponent_stars": opponent_stars,
+                "clan_destruction": clan.get("destructionPercentage"),
+                "opponent_destruction": opponent.get("destructionPercentage"),
+                "attacks_used": war_used_attacks,
+                "possible_attacks": war_possible_attacks,
+                "missed_attacks": max(0, war_possible_attacks - war_used_attacks),
+            }
+        )
 
     return totals
 
@@ -217,6 +296,20 @@ def filter_recent_wars(loaded_wars, days):
         filtered.append((path, war))
 
     return filtered
+
+
+def dedupe_wars(loaded_wars):
+    seen = set()
+    deduped = []
+
+    for path, war in loaded_wars:
+        key = war_key(war)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append((path, war))
+
+    return deduped
 
 
 def format_percent(numerator, denominator):
@@ -291,11 +384,12 @@ def build_report(totals, days):
     lines = [
         "📊 Weekly War Report",
         "",
-        f"Period: Last {days} days",
+        f"Period: {'All tracked wars' if days == 'all tracked' else f'Last {days} days'}",
         f"Wars: {totals['wars']}",
         f"Record: {summary['record']}",
         "",
         f"Total Attacks: {totals['used_attacks']}",
+        f"Possible Attacks: {totals['possible_attacks']}",
         f"Unused Attacks: {totals['unused_attacks']}",
         f"Attack Usage: {summary['usage_percent']}",
         "",
@@ -348,6 +442,22 @@ def generate_weekly_report_data(days=None, data_dir=DEFAULT_WAR_RESULTS_DIR):
     }
 
 
+def generate_history_report_data(data_dir=DEFAULT_WAR_RESULTS_DIR):
+    loaded_wars = load_war_files(data_dir)
+    history_wars = dedupe_wars(loaded_wars)
+    totals = aggregate_wars(history_wars)
+    summary = report_summary(totals)
+
+    return {
+        "days": None,
+        "recent_wars": history_wars,
+        "totals": totals,
+        "summary": summary,
+        "notes": build_notes(totals, summary["usage_percent_number"]),
+        "report_text": build_report(totals, "all tracked"),
+    }
+
+
 def generate_weekly_report_text(days=None, data_dir=DEFAULT_WAR_RESULTS_DIR):
     report_data = generate_weekly_report_data(days=days, data_dir=data_dir)
     return report_data["report_text"], report_data["days"]
@@ -390,11 +500,15 @@ def render_stat_cards(report_data):
         if possible_attacks
         else "No attacks tracked"
     )
+    period_detail = "All tracked wars" if report_data.get("days") is None else f"Last {report_data['days']} days"
     cards = [
-        ("Wars", totals["wars"], f"Last {report_data['days']} days"),
+        ("Members", len(totals["players"]), "Roster members in snapshots"),
+        ("Wars", totals["wars"], period_detail),
         ("Record", summary["record"], "Wins - losses - ties"),
-        ("Attack Usage", summary["usage_percent"], attack_detail),
+        ("Attacks Used", used_attacks, attack_detail),
+        ("Possible Attacks", possible_attacks, "Across tracked wars"),
         ("Unused Attacks", totals["unused_attacks"], "Missed available attacks"),
+        ("Attack Usage", summary["usage_percent"], "Overall participation rate"),
         ("Total Stars", totals["stars"], f"{summary['average_stars']:.1f} per war"),
     ]
 
@@ -439,35 +553,146 @@ def render_player_list(players, field, empty_text, formatter, limit=5):
     return f'<ol class="rank-list">\n{"".join(items)}\n      </ol>'
 
 
-def render_recent_wars(wars):
-    if not wars:
-        return '<p class="empty">No completed wars are available for this report period.</p>'
+def display_value(value):
+    if value is None:
+        return "N/A"
+    return str(value)
+
+
+def donation_delta(player, first_field, last_field):
+    first_value = player.get(first_field)
+    last_value = player.get(last_field)
+    if not isinstance(first_value, (int, float)) or not isinstance(last_value, (int, float)):
+        return "N/A"
+    return str(last_value - first_value)
+
+
+def player_average_stars(player):
+    attacks_used = player.get("attacks_used", 0)
+    if not attacks_used:
+        return "0.0"
+    return f"{player.get('stars', 0) / attacks_used:.1f}"
+
+
+def player_average_destruction(player):
+    count = player.get("destruction_count", 0)
+    if not count:
+        return "0.0%"
+    return f"{player.get('destruction', 0.0) / count:.1f}%"
+
+
+def render_roster_table(players):
+    if not players:
+        return '<p class="empty">No roster members found in tracked snapshots.</p>'
 
     rows = []
-    fallback_date = datetime.min.replace(tzinfo=timezone.utc)
-    sorted_wars = sorted(
-        wars,
-        key=lambda item: war_start_time(item[1]) or fallback_date,
-        reverse=True,
-    )
-
-    for _path, war in sorted_wars[:5]:
-        clan = war.get("clan", {})
-        opponent = war.get("opponent", {})
-        opponent_name = text_or_default(opponent.get("name"), "Opponent")
-        clan_stars = safe_number(clan.get("stars"))
-        opponent_stars = safe_number(opponent.get("stars"))
-        destruction = clan.get("destructionPercentage")
-        destruction_text = f"{destruction:.1f}%" if isinstance(destruction, (int, float)) else "N/A"
-
+    for player in sorted(players.values(), key=lambda item: item["name"].lower()):
         rows.append(
             f"""
         <tr>
-          <td>{html.escape(format_war_date(war))}</td>
-          <td>{html.escape(opponent_name)}</td>
-          <td><span class="result">{html.escape(war_result_label(war))}</span></td>
-          <td>{html.escape(str(clan_stars))}-{html.escape(str(opponent_stars))}</td>
-          <td>{html.escape(destruction_text)}</td>
+          <td>{html.escape(text_or_default(player.get("name")))}</td>
+          <td>{html.escape(text_or_default(player.get("tag")))}</td>
+          <td>{html.escape(display_value(player.get("role")))}</td>
+          <td>{html.escape(display_value(player.get("town_hall")))}</td>
+          <td>{html.escape(display_value(player.get("trophies")))}</td>
+          <td>{html.escape(display_value(player.get("donations")))}</td>
+          <td>{html.escape(display_value(player.get("donations_received")))}</td>
+          <td>{html.escape(donation_delta(player, "first_donations", "last_donations"))}</td>
+          <td>{html.escape(donation_delta(player, "first_donations_received", "last_donations_received"))}</td>
+        </tr>"""
+        )
+
+    return f"""
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Tag</th>
+              <th>Role</th>
+              <th>Town Hall</th>
+              <th>Trophies</th>
+              <th>Donations</th>
+              <th>Received</th>
+              <th>7-Day Donation Delta</th>
+              <th>7-Day Received Delta</th>
+            </tr>
+          </thead>
+          <tbody>{"".join(rows)}
+          </tbody>
+        </table>
+      </div>"""
+
+
+def render_member_war_performance(players):
+    if not players:
+        return '<p class="empty">No member war performance available yet.</p>'
+
+    rows = []
+    ranked_players = sorted(
+        players.values(),
+        key=lambda player: (-player.get("stars", 0), -player.get("attacks_used", 0), player["name"].lower()),
+    )
+    for player in ranked_players:
+        rows.append(
+            f"""
+        <tr>
+          <td>{html.escape(text_or_default(player.get("name")))}</td>
+          <td>{html.escape(text_or_default(player.get("tag")))}</td>
+          <td>{html.escape(str(player.get("attacks_used", 0)))}</td>
+          <td>{html.escape(str(player.get("possible_attacks", 0)))}</td>
+          <td>{html.escape(str(player.get("attacks_missed", 0)))}</td>
+          <td>{html.escape(str(player.get("wars_participated", 0)))}</td>
+          <td>{html.escape(str(player.get("stars", 0)))}</td>
+          <td>{html.escape(player_average_stars(player))}</td>
+          <td>{html.escape(f"{player.get('destruction', 0.0):.1f}%")}</td>
+          <td>{html.escape(player_average_destruction(player))}</td>
+        </tr>"""
+        )
+
+    return f"""
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Tag</th>
+              <th>Attacks Used</th>
+              <th>Possible</th>
+              <th>Missed</th>
+              <th>Wars</th>
+              <th>Stars</th>
+              <th>Avg Stars / Attack</th>
+              <th>Total Destruction</th>
+              <th>Avg Destruction</th>
+            </tr>
+          </thead>
+          <tbody>{"".join(rows)}
+          </tbody>
+        </table>
+      </div>"""
+
+
+def render_war_summary_table(war_summaries):
+    if not war_summaries:
+        return '<p class="empty">No completed wars are available for this report period.</p>'
+
+    rows = []
+    for war in reversed(war_summaries):
+        rows.append(
+            f"""
+        <tr>
+          <td>{html.escape(war["date"])}</td>
+          <td>{html.escape(war["opponent"])}</td>
+          <td><span class="result">{html.escape(war["result"])}</span></td>
+          <td>{html.escape(str(war["team_size"]))}</td>
+          <td>{html.escape(str(war["clan_stars"]))}</td>
+          <td>{html.escape(str(war["opponent_stars"]))}</td>
+          <td>{html.escape(format_decimal_percent(war["clan_destruction"]))}</td>
+          <td>{html.escape(format_decimal_percent(war["opponent_destruction"]))}</td>
+          <td>{html.escape(str(war["attacks_used"]))}</td>
+          <td>{html.escape(str(war["possible_attacks"]))}</td>
+          <td>{html.escape(str(war["missed_attacks"]))}</td>
         </tr>"""
         )
 
@@ -479,14 +704,24 @@ def render_recent_wars(wars):
               <th>Date</th>
               <th>Opponent</th>
               <th>Result</th>
-              <th>Stars</th>
-              <th>Destruction</th>
+              <th>Team Size</th>
+              <th>Clan Stars</th>
+              <th>Opponent Stars</th>
+              <th>Clan Destruction</th>
+              <th>Opponent Destruction</th>
+              <th>Attacks Used</th>
+              <th>Possible</th>
+              <th>Missed</th>
             </tr>
           </thead>
           <tbody>{"".join(rows)}
           </tbody>
         </table>
       </div>"""
+
+
+def render_recent_wars(wars):
+    return render_war_summary_table(aggregate_wars(wars)["war_summaries"])
 
 
 def render_notes(notes):
@@ -501,6 +736,7 @@ def render_nav(active_page):
     links = [
         ("index.html", "Weekly Report", "weekly"),
         ("current-war.html", "Current War", "current"),
+        ("history.html", "Total History", "history"),
     ]
     rendered_links = []
     for href, label, page in links:
@@ -774,7 +1010,15 @@ def build_report_html(report_text, days, generated_at=None, report_data=None):
 
     escaped_report = html.escape(report_text)
     generated_text = html.escape(format_display_datetime(generated_at))
-    period_text = html.escape(f"Last {days} days")
+    period_text = html.escape("All tracked wars" if days is None else f"Last {days} days")
+    page_title = "CoC Total History" if days is None else "CoC Weekly Report"
+    heading = "Total War History" if days is None else "Clash of Clans Weekly Report"
+    active_page = "history" if days is None else "weekly"
+    subtitle = (
+        "Static dashboard generated from all saved final war snapshots."
+        if days is None
+        else "Static dashboard generated from saved war snapshots."
+    )
     stat_cards = render_stat_cards(report_data)
     top_performers = render_player_list(
         report_data["totals"]["players"],
@@ -793,7 +1037,9 @@ def build_report_html(report_text, days, generated_at=None, report_data=None):
         ),
         limit=10,
     )
-    recent_wars = render_recent_wars(report_data["recent_wars"])
+    roster_table = render_roster_table(report_data["totals"]["players"])
+    war_summary = render_war_summary_table(report_data["totals"]["war_summaries"])
+    member_performance = render_member_war_performance(report_data["totals"]["players"])
     notes = render_notes(report_data["notes"])
 
     return f"""<!doctype html>
@@ -801,18 +1047,18 @@ def build_report_html(report_text, days, generated_at=None, report_data=None):
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CoC Weekly Report</title>
+  <title>{html.escape(page_title)}</title>
   <style>
 {render_site_styles()}
   </style>
 </head>
 <body>
   <main>
-    {render_nav("weekly")}
+    {render_nav(active_page)}
     <header>
       <div>
-        <h1>Clash of Clans Weekly Report</h1>
-        <p class="meta">Static dashboard generated from saved war snapshots.</p>
+        <h1>{html.escape(heading)}</h1>
+        <p class="meta">{html.escape(subtitle)}</p>
       </div>
       <div class="header-meta" aria-label="Report metadata">
         <p class="meta">Generated: {generated_text}</p>
@@ -843,10 +1089,26 @@ def build_report_html(report_text, days, generated_at=None, report_data=None):
 
       <article class="card wide">
         <div class="section-head">
-          <h2>Recent Wars</h2>
-          <p class="section-kicker">Latest completed snapshots</p>
+          <h2>Full Roster</h2>
+          <p class="section-kicker">Includes zero-attack members found in snapshots</p>
         </div>
-        {recent_wars}
+        {roster_table}
+      </article>
+
+      <article class="card wide">
+        <div class="section-head">
+          <h2>War Summary</h2>
+          <p class="section-kicker">All tracked wars in this report</p>
+        </div>
+        {war_summary}
+      </article>
+
+      <article class="card wide">
+        <div class="section-head">
+          <h2>War Participation by Member</h2>
+          <p class="section-kicker">Average destruction uses only attacks actually used</p>
+        </div>
+        {member_performance}
       </article>
 
       <article class="card wide">
@@ -1176,7 +1438,7 @@ def build_current_war_html(war=None, generated_at=None):
 def write_site(report_text, days, output_dir=DEFAULT_SITE_OUTPUT_DIR, report_data=None):
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, "index.html")
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write(build_report_html(report_text, days, report_data=report_data))
     return output_path
 
@@ -1184,8 +1446,17 @@ def write_site(report_text, days, output_dir=DEFAULT_SITE_OUTPUT_DIR, report_dat
 def write_current_war_site(war=None, output_dir=DEFAULT_SITE_OUTPUT_DIR):
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, "current-war.html")
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write(build_current_war_html(war=war))
+    return output_path
+
+
+def write_history_site(output_dir=DEFAULT_SITE_OUTPUT_DIR, report_data=None):
+    os.makedirs(output_dir, exist_ok=True)
+    report_data = report_data or generate_history_report_data()
+    output_path = os.path.join(output_dir, "history.html")
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(build_report_html(report_data["report_text"], None, report_data=report_data))
     return output_path
 
 
