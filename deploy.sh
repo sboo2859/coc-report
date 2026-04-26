@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -e
+set -euo pipefail
 
 echo "Building CoC report site..."
 python3 build_site.py --include-current-war

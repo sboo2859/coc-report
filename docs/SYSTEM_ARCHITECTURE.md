@@ -19,9 +19,13 @@ It is intentionally script-based and file-based. That keeps the project easy to 
 
 `war_warning_message.py` fetches the live current war and prints a copy/paste reminder for members with attacks remaining. It does not store data or send notifications.
 
-`weekly_report.py` reads saved final snapshots from `data/war_results/` and builds a weekly performance report. It does not call the Clash API.
+`weekly_report.py` reads saved final snapshots from `data/war_results/` and builds weekly and all-time historical reports. These reports include full roster tables with member attacks, stars, and average attack destruction. It does not call the Clash API for saved-snapshot reporting.
 
-`build_site.py` generates static HTML under `site_output/` for Cloudflare Pages. By default it writes only the weekly report. With `--include-current-war`, it also fetches the live current war and writes a static current-war dashboard.
+`build_site.py` generates static HTML under `site_output/` for Cloudflare Pages. By default it writes the weekly report and total history pages. With `--include-current-war`, it also fetches the live current war and writes a static current-war dashboard.
+
+`deploy.sh` is the one-time local deploy command. It rebuilds the full static site with current-war data, stages only `site_output/`, commits if generated output changed, and pushes normally to GitHub.
+
+`auto_deploy_loop.sh` is the long-running PC refresh loop. It repeatedly runs the same deploy flow, asks `war_poll_interval.py` how long to sleep based on current war state and time left, and keeps running until stopped.
 
 ## Data Flow
 
@@ -53,6 +57,17 @@ site_output/index.html
    v
 GitHub -> Cloudflare Pages
 
+data/war_results/
+   |
+   v
+build_site.py
+   |
+   v
+site_output/history.html
+   |
+   v
+GitHub -> Cloudflare Pages
+
 Clash API
    |
    v
@@ -68,6 +83,20 @@ site_output/current-war.html
    |
    v
 GitHub -> Cloudflare Pages
+
+PC auto loop
+   |
+   v
+build_site.py --include-current-war
+   |
+   v
+site_output/
+   |
+   v
+git push
+   |
+   v
+Cloudflare Pages
 ```
 
 ## How Components Interact
@@ -76,11 +105,15 @@ GitHub -> Cloudflare Pages
 
 The scheduler imports both `fetch_current_war()` and `save_war_snapshot()`. It adds scheduling, dedupe, and final-result timing around those reusable helpers.
 
-The weekly report does not depend on live API access. Its input is the durable JSON output from the scheduler.
+The weekly report and total history page do not depend on live API access. Their input is the durable JSON output from the scheduler.
 
 The static site generator wraps the same weekly report logic in self-contained HTML. The generated `site_output/index.html` is committed to GitHub so Cloudflare Pages can deploy it without running Python.
 
+The history page uses the same saved final snapshots but includes all deduped wars instead of the weekly report window. It derives all-time war totals, member accountability metrics, and full roster performance, then writes `site_output/history.html`.
+
 When `build_site.py --include-current-war` is used, `build_site.py` calls `fetch_current_war()` once at build time. If the API call succeeds, `site_output/current-war.html` contains the current state, timing, attack usage, remaining attacks, and a copy/paste warning message. If the token is missing or the API fails, the page is still generated with an unavailable-data message.
+
+The auto deploy loop is intended to run on the PC where `COC_API_TOKEN` is available. It never force-pushes and only stages `site_output/`, so runtime data directories remain outside deploy commits.
 
 Displayed site timestamps are formatted in Central Time using `ZoneInfo("America/Chicago")` when available, with a UTC fallback if Python cannot load zoneinfo.
 

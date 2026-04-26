@@ -135,6 +135,7 @@ This writes:
 
 ```text
 site_output/index.html
+site_output/history.html
 ```
 
 Optionally include a static current-war page from the live Clash API:
@@ -148,11 +149,12 @@ This writes:
 ```text
 site_output/index.html
 site_output/current-war.html
+site_output/history.html
 ```
 
-The weekly report uses saved final snapshots from `data/war_results/` and does not require API access. The current-war page requires `COC_API_TOKEN` at build time. If the token is missing or the API call fails, the build still writes `current-war.html` with an unavailable-data message.
+The weekly report uses the selected report window from saved final snapshots in `data/war_results/` and does not require API access. Total History uses all saved final snapshots in `data/war_results/`. The current-war page requires `COC_API_TOKEN` at build time. If the token is missing or the API call fails, the build still writes `current-war.html` with an unavailable-data message.
 
-You can also generate the site directly from the report script:
+You can also generate only the weekly page directly from the report script:
 
 ```bash
 python3 weekly_report.py --site
@@ -161,7 +163,7 @@ python3 weekly_report.py --site
 Commit and push the generated site:
 
 ```bash
-git add site_output/index.html
+git add site_output/index.html site_output/history.html
 git commit -m "Update weekly report site"
 git push
 ```
@@ -173,6 +175,41 @@ git add site_output/current-war.html
 ```
 
 The site is static. Cloudflare Pages serves the committed files and only updates after you rebuild locally, commit the generated HTML, and push.
+
+### Local deploy
+
+Run a one-time build, commit, and push of `site_output/`:
+
+```bash
+./deploy.sh
+```
+
+Run continuous PC-based refresh:
+
+```bash
+./auto_deploy_loop.sh
+```
+
+Run it detached:
+
+```bash
+nohup ./auto_deploy_loop.sh > auto_deploy.log 2>&1 &
+```
+
+Watch logs:
+
+```bash
+tail -f auto_deploy.log
+```
+
+Stop it:
+
+```bash
+ps aux | grep auto_deploy_loop
+kill <PID>
+```
+
+The auto deploy loop should run on the PC where `COC_API_TOKEN` is permanently available. It rebuilds the static site, commits only `site_output/` when generated output changes, and lets Cloudflare Pages redeploy from the GitHub push.
 
 ### Cloudflare Pages setup
 

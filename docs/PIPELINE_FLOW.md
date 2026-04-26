@@ -89,7 +89,8 @@ The script:
 3. Filters wars to the last `REPORT_DAYS` days.
 4. Deduplicates wars by `(startTime, clan.tag, opponent.tag)`.
 5. Aggregates record, attack usage, stars, missed attacks, top performers, and average destruction when available.
-6. Prints a copy/paste-ready report.
+6. Builds a full roster table for the report window with wars participated, attacks, stars, and average attack destruction.
+7. Prints a copy/paste-ready report.
 
 Weekly reporting never calls the Clash API. This makes it safe to run anytime, even without an API token.
 
@@ -101,28 +102,50 @@ Run:
 python3 build_site.py
 ```
 
-or:
+To generate only the weekly page directly from the report script:
 
 ```bash
 python3 weekly_report.py --site
 ```
 
-The static site flow:
+The `build_site.py` static site flow:
 
 1. Reads local JSON files from `data/war_results/`.
 2. Builds the same weekly report text used by terminal output.
-3. Builds a self-contained dashboard and keeps the copy/paste text report.
+3. Builds a self-contained dashboard with stat cards, current-window roster, and the copy/paste text report.
 4. Writes `site_output/index.html`.
-5. The generated file can be committed and pushed to GitHub.
-6. Cloudflare Pages serves `site_output/` as a no-framework static site.
+5. Builds all-time history from all deduped saved final snapshots.
+6. Writes `site_output/history.html`.
+7. The generated files can be committed and pushed to GitHub.
+8. Cloudflare Pages serves `site_output/` as a no-framework static site.
 
 This flow is:
 
 ```text
 local snapshots -> weekly_report.py/build_site.py -> site_output/index.html -> GitHub -> Cloudflare Pages
+data/war_results/ -> build_site.py -> history.html -> GitHub -> Cloudflare Pages
 ```
 
 Displayed site timestamps are converted to Central Time with `ZoneInfo("America/Chicago")` when available.
+
+## Total History Flow
+
+The history page is generated during the default static site build:
+
+```bash
+python3 build_site.py
+```
+
+The history flow:
+
+1. Reads local JSON files from `data/war_results/`.
+2. Skips malformed or unreadable files.
+3. Deduplicates wars by `(startTime, clan.tag, opponent.tag)`.
+4. Aggregates all-time record, attacks, stars, and average destruction.
+5. Calculates member accountability and full roster metrics across all tracked wars.
+6. Writes `site_output/history.html`.
+
+History generation never calls the Clash API.
 
 ## Static Current War Flow
 
@@ -149,3 +172,34 @@ This flow is:
 ```text
 Clash API -> build_site.py --include-current-war -> current-war.html -> GitHub -> Cloudflare Pages
 ```
+
+## Local Deploy Flow
+
+Run a one-time deploy:
+
+```bash
+./deploy.sh
+```
+
+The deploy command:
+
+1. Runs `python3 build_site.py --include-current-war`.
+2. Checks `site_output/` for generated changes.
+3. Stages only `site_output/`.
+4. Commits with `Update CoC report site` when generated output changed.
+5. Pushes normally to GitHub.
+6. Cloudflare Pages redeploys from the push.
+
+Run continuous PC-based refresh:
+
+```bash
+./auto_deploy_loop.sh
+```
+
+The auto loop follows this flow:
+
+```text
+PC auto loop -> build_site.py --include-current-war -> site_output/ -> git push -> Cloudflare Pages
+```
+
+After each loop, `war_poll_interval.py` fetches current war state and returns the next sleep interval: 2 hours when not in war, 60 minutes during preparation or after war end, 30 minutes during active war, 15 minutes under 3 hours left, 10 minutes under 1 hour left, and 60 minutes when API access is unavailable.

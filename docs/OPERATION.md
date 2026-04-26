@@ -124,6 +124,7 @@ This writes:
 
 ```text
 site_output/index.html
+site_output/history.html
 ```
 
 To include current war status, build with API access:
@@ -137,14 +138,15 @@ This writes:
 ```text
 site_output/index.html
 site_output/current-war.html
+site_output/history.html
 ```
 
-The weekly report page reads saved snapshots only. The current-war page requires `COC_API_TOKEN` for the live API call; if the token is missing or the API call fails, the page is still generated with an unavailable-data message.
+The weekly report page uses the selected report window from saved snapshots and includes a full roster table for that window. The history page uses all saved final snapshots in `data/war_results/` and includes all-time roster accountability. The current-war page requires `COC_API_TOKEN` for the live API call; if the token is missing or the API call fails, the page is still generated with an unavailable-data message.
 
 Commit and push the generated page:
 
 ```bash
-git add site_output/index.html
+git add site_output/index.html site_output/history.html
 git commit -m "Update weekly report site"
 git push
 ```
@@ -163,6 +165,41 @@ Production branch: main
 ```
 
 Cloudflare Pages redeploys when GitHub receives a new push.
+
+## Local Deploy Commands
+
+Run a one-time build, commit, and push of generated site output:
+
+```bash
+./deploy.sh
+```
+
+Run continuous PC-based refresh:
+
+```bash
+./auto_deploy_loop.sh
+```
+
+Run it detached:
+
+```bash
+nohup ./auto_deploy_loop.sh > auto_deploy.log 2>&1 &
+```
+
+Watch logs:
+
+```bash
+tail -f auto_deploy.log
+```
+
+Stop it:
+
+```bash
+ps aux | grep auto_deploy_loop
+kill <PID>
+```
+
+The auto deploy loop should run on the PC where `COC_API_TOKEN` is permanently available. It rebuilds with current-war data, stages only `site_output/`, uses normal `git push`, and keeps retrying after failed builds or pushes.
 
 ## Troubleshooting
 
@@ -189,6 +226,10 @@ Malformed JSON in `data/war_results/` is skipped by `weekly_report.py`. Remove o
 Missing or empty static report:
 
 Run `python3 build_site.py` again and confirm `site_output/index.html` exists. If the page says no war data is available, check that final snapshots exist in `data/war_results/` and are inside the selected report period.
+
+Missing or empty history:
+
+Run `python3 build_site.py` again and confirm `site_output/history.html` exists. If the page says no historical war data is available yet, check that final snapshots exist in `data/war_results/`.
 
 Current war page unavailable:
 
