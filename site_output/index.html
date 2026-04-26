@@ -256,19 +256,25 @@
 </head>
 <body>
   <main>
-    <nav aria-label="Site navigation"><a href="index.html" class="active">Weekly Report</a><a href="current-war.html">Current War</a></nav>
+    <nav aria-label="Site navigation"><a href="index.html" class="active">Weekly Report</a><a href="current-war.html">Current War</a><a href="history.html">Total History</a></nav>
     <header>
       <div>
         <h1>Clash of Clans Weekly Report</h1>
         <p class="meta">Static dashboard generated from saved war snapshots.</p>
       </div>
       <div class="header-meta" aria-label="Report metadata">
-        <p class="meta">Generated: Apr 26, 2026 9:54 PM UTC</p>
+        <p class="meta">Generated: Apr 26, 2026 10:09 PM UTC</p>
         <p class="meta">Report period: <span class="period">Last 7 days</span></p>
       </div>
     </header>
 
     <section class="stat-grid" aria-label="Report statistics">
+
+      <article class="stat-card">
+        <p class="stat-label">Members</p>
+        <p class="stat-value">0</p>
+        <p class="stat-detail">Roster members in snapshots</p>
+      </article>
 
       <article class="stat-card">
         <p class="stat-label">Wars</p>
@@ -283,15 +289,27 @@
       </article>
 
       <article class="stat-card">
-        <p class="stat-label">Attack Usage</p>
-        <p class="stat-value">0%</p>
+        <p class="stat-label">Attacks Used</p>
+        <p class="stat-value">0</p>
         <p class="stat-detail">No attacks tracked</p>
+      </article>
+
+      <article class="stat-card">
+        <p class="stat-label">Possible Attacks</p>
+        <p class="stat-value">0</p>
+        <p class="stat-detail">Across tracked wars</p>
       </article>
 
       <article class="stat-card">
         <p class="stat-label">Unused Attacks</p>
         <p class="stat-value">0</p>
         <p class="stat-detail">Missed available attacks</p>
+      </article>
+
+      <article class="stat-card">
+        <p class="stat-label">Attack Usage</p>
+        <p class="stat-value">0%</p>
+        <p class="stat-detail">Overall participation rate</p>
       </article>
 
       <article class="stat-card">
@@ -320,10 +338,26 @@
 
       <article class="card wide">
         <div class="section-head">
-          <h2>Recent Wars</h2>
-          <p class="section-kicker">Latest completed snapshots</p>
+          <h2>Full Roster</h2>
+          <p class="section-kicker">Includes zero-attack members found in snapshots</p>
+        </div>
+        <p class="empty">No roster members found in tracked snapshots.</p>
+      </article>
+
+      <article class="card wide">
+        <div class="section-head">
+          <h2>War Summary</h2>
+          <p class="section-kicker">All tracked wars in this report</p>
         </div>
         <p class="empty">No completed wars are available for this report period.</p>
+      </article>
+
+      <article class="card wide">
+        <div class="section-head">
+          <h2>War Participation by Member</h2>
+          <p class="section-kicker">Average destruction uses only attacks actually used</p>
+        </div>
+        <p class="empty">No member war performance available yet.</p>
       </article>
 
       <article class="card wide">

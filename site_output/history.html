@@ -259,25 +259,31 @@
     <nav aria-label="Site navigation"><a href="index.html">Weekly Report</a><a href="current-war.html">Current War</a><a href="history.html" class="active">Total History</a></nav>
     <header>
       <div>
-        <h1>Total History</h1>
-        <p class="meta">No historical war data available yet.</p>
+        <h1>Total War History</h1>
+        <p class="meta">Static dashboard generated from all saved final war snapshots.</p>
       </div>
-      <div class="header-meta" aria-label="History metadata">
-        <p class="meta">Generated: Apr 26, 2026 3:47 PM CDT</p>
-        <p class="meta">Source: <span class="period">All saved final wars</span></p>
+      <div class="header-meta" aria-label="Report metadata">
+        <p class="meta">Generated: Apr 26, 2026 10:09 PM UTC</p>
+        <p class="meta">Report period: <span class="period">All tracked wars</span></p>
       </div>
     </header>
 
-    <section class="stat-grid" aria-label="All-time statistics">
+    <section class="stat-grid" aria-label="Report statistics">
 
       <article class="stat-card">
-        <p class="stat-label">Total Wars</p>
+        <p class="stat-label">Members</p>
         <p class="stat-value">0</p>
-        <p class="stat-detail">Deduped final snapshots</p>
+        <p class="stat-detail">Roster members in snapshots</p>
       </article>
 
       <article class="stat-card">
-        <p class="stat-label">All-Time Record</p>
+        <p class="stat-label">Wars</p>
+        <p class="stat-value">0</p>
+        <p class="stat-detail">All tracked wars</p>
+      </article>
+
+      <article class="stat-card">
+        <p class="stat-label">Record</p>
         <p class="stat-value">0W - 0L</p>
         <p class="stat-detail">Wins - losses - ties</p>
       </article>
@@ -285,68 +291,91 @@
       <article class="stat-card">
         <p class="stat-label">Attacks Used</p>
         <p class="stat-value">0</p>
-        <p class="stat-detail">0 possible</p>
+        <p class="stat-detail">No attacks tracked</p>
       </article>
 
       <article class="stat-card">
-        <p class="stat-label">Attacks Missed</p>
+        <p class="stat-label">Possible Attacks</p>
         <p class="stat-value">0</p>
-        <p class="stat-detail">Total unused attacks</p>
+        <p class="stat-detail">Across tracked wars</p>
+      </article>
+
+      <article class="stat-card">
+        <p class="stat-label">Unused Attacks</p>
+        <p class="stat-value">0</p>
+        <p class="stat-detail">Missed available attacks</p>
       </article>
 
       <article class="stat-card">
         <p class="stat-label">Attack Usage</p>
         <p class="stat-value">0%</p>
-        <p class="stat-detail">Overall usage</p>
+        <p class="stat-detail">Overall participation rate</p>
       </article>
 
       <article class="stat-card">
         <p class="stat-label">Total Stars</p>
         <p class="stat-value">0</p>
-        <p class="stat-detail">Stars earned</p>
-      </article>
-
-      <article class="stat-card">
-        <p class="stat-label">Avg Stars / War</p>
-        <p class="stat-value">0.0</p>
-        <p class="stat-detail">All tracked wars</p>
+        <p class="stat-detail">0.0 per war</p>
       </article>
     </section>
 
-    <section class="dashboard-grid" aria-label="History details">
+    <section class="dashboard-grid" aria-label="Report details">
+      <article class="card">
+        <div class="section-head">
+          <h2>Top Performers</h2>
+          <p class="section-kicker">By stars</p>
+        </div>
+        <p class="empty">No top performers yet.</p>
+      </article>
+
+      <article class="card">
+        <div class="section-head">
+          <h2>Missed Attacks</h2>
+          <p class="section-kicker">Needs follow-up</p>
+        </div>
+        <p class="empty">No missed attacks tracked.</p>
+      </article>
+
       <article class="card wide">
         <div class="section-head">
           <h2>Full Roster</h2>
-          <p class="section-kicker">All tracked members</p>
+          <p class="section-kicker">Includes zero-attack members found in snapshots</p>
         </div>
-        <p class="empty">No historical war data available yet.</p>
+        <p class="empty">No roster members found in tracked snapshots.</p>
       </article>
 
       <article class="card wide">
         <div class="section-head">
-          <h2>Member Accountability</h2>
-          <p class="section-kicker">Sorted by missed attacks</p>
+          <h2>War Summary</h2>
+          <p class="section-kicker">All tracked wars in this report</p>
         </div>
-        <p class="empty">No historical war data available yet.</p>
+        <p class="empty">No completed wars are available for this report period.</p>
       </article>
 
       <article class="card wide">
         <div class="section-head">
-          <h2>Top Reliable Members</h2>
-          <p class="section-kicker">Fewest misses first</p>
+          <h2>War Participation by Member</h2>
+          <p class="section-kicker">Average destruction uses only attacks actually used</p>
         </div>
-        <p class="empty">No historical war data available yet.</p>
+        <p class="empty">No member war performance available yet.</p>
       </article>
 
       <article class="card wide">
         <div class="section-head">
-          <h2>Repeat Missed Attacks</h2>
+          <h2>Notes</h2>
         </div>
-        <p class="empty">No missed attacks recorded in tracked wars.</p>
+        <ul class="note-list"><li>No completed war snapshots found for this report period</li></ul>
       </article>
     </section>
+
+    <section class="card report-card" aria-label="Copy paste report text">
+      <div class="section-head">
+        <h2>Copy/Paste Report</h2>
+      </div>
+      <pre>No war data available for the selected period.</pre>
+    </section>
     <footer>
-      History is generated from local saved final war snapshots.
+      Report generated from local saved war snapshots.
     </footer>
   </main>
 </body>
