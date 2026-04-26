@@ -1,0 +1,164 @@
+# CoC Report
+
+Utilities for fetching Clash of Clans current war snapshots.
+
+## System Documentation
+
+- [System Architecture](docs/SYSTEM_ARCHITECTURE.md)
+- [Pipeline Flow](docs/PIPELINE_FLOW.md)
+- [Data Contracts](docs/DATA_CONTRACTS.md)
+- [Operation Guide](docs/OPERATION.md)
+- [Architecture Decisions](docs/DECISIONS.md)
+
+## Configuration
+
+Set your Clash of Clans API token before running either script:
+
+```bash
+export COC_API_TOKEN="your Clash API token"
+```
+
+The default clan tag is configured in `fetch_war.py`. You can override it without editing code:
+
+```bash
+export COC_CLAN_TAG="#22YY2LPV2"
+```
+
+## Manual One-Time Fetch
+
+Run a one-time current war fetch:
+
+```bash
+python3 fetch_war.py
+```
+
+Snapshots are saved under `data/wars/`.
+
+## Automated War-End Scheduler
+
+Run the scheduler:
+
+```bash
+python3 schedule_war_snapshot.py
+```
+
+The scheduler watches the `currentwar` response, waits until `endTime` plus a settlement buffer, then saves the final war snapshot. It also saves immediately when the current war is already in `warEnded` state.
+
+Final war snapshots are saved under `data/war_results/`.
+
+Saved war keys are tracked in `data/state/saved_wars.json` so the same ended war is not saved repeatedly.
+
+## War Warning Message
+
+Generate a copy/paste warning for members who still have attacks remaining:
+
+```bash
+python3 war_warning_message.py
+```
+
+Optional count controls:
+
+```bash
+python3 war_warning_message.py --counts
+python3 war_warning_message.py --no-counts
+```
+
+Example output:
+
+```text
+⚠️ War reminder — about 3 hours left.
+
+Still need attacks from:
+PlayerOne — 2 attacks left
+PlayerTwo — 1 attack left
+
+Please use your attacks before war ends.
+```
+
+This does not automatically tag members in Clash of Clans chat. Leaders should manually tag/select members in-game if they want true notification behavior.
+
+## Weekly Report
+
+Generate a weekly summary from saved war results:
+
+```bash
+python3 weekly_report.py
+```
+
+Optional period control:
+
+```bash
+python3 weekly_report.py --days 14
+```
+
+Example output:
+
+```text
+📊 Weekly War Report
+
+Period: Last 7 days
+Wars: 5
+Record: 3W - 2L
+
+Total Attacks: 180
+Unused Attacks: 12
+Attack Usage: 93%
+
+Total Stars: 132
+Average Stars per War: 26.4
+
+Top Performers:
+1. PlayerOne — 12⭐
+2. PlayerTwo — 11⭐
+3. PlayerThree — 10⭐
+
+Missed Attacks:
+PlayerFour — missed 4 attacks
+PlayerFive — missed 3 attacks
+
+Notes:
+- Strong attack usage overall
+- A few repeat missed attacks to address
+```
+
+The report reads local JSON files only. It does not call the Clash API.
+
+## Scheduler Settings
+
+These environment variables are optional:
+
+```bash
+export WAR_END_BUFFER_MINUTES=2
+export WAR_PREP_POLL_MINUTES=30
+export WAR_IDLE_POLL_MINUTES=60
+export WAR_ENDED_POLL_MINUTES=30
+export WAR_RESULTS_DIR=data/war_results
+export WAR_WARNING_TARGET_HOURS=3
+export WAR_WARNING_INCLUDE_COUNTS=true
+export REPORT_DAYS=7
+```
+
+Defaults are shown above.
+
+## Run Detached
+
+Start the scheduler in the background:
+
+```bash
+nohup python3 schedule_war_snapshot.py > war_scheduler.log 2>&1 &
+```
+
+Watch logs:
+
+```bash
+tail -f war_scheduler.log
+```
+
+Stop the scheduler:
+
+```bash
+ps aux | grep schedule_war_snapshot
+kill <PID>
+```
+
+This same scheduler can later move unchanged to a VPS with a static IP address added to the Clash API allowlist.
