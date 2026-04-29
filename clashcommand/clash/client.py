@@ -48,6 +48,14 @@ class ClashClient:
             return []
         return members
 
+    def get_player(self, player_tag):
+        import requests
+
+        encoded_player_tag = quote(player_tag, safe="")
+        url = f"{self.BASE_URL}/players/{encoded_player_tag}"
+        response = requests.get(url, headers=self._headers(), timeout=self.timeout)
+        return self._json_or_raise(response)
+
     def _json_or_raise(self, response):
         if response.status_code == 200:
             return response.json()

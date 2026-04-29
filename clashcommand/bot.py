@@ -11,7 +11,12 @@ from clashcommand.clash.time import format_central_time
 from clashcommand.clash.war import current_war_overview
 from clashcommand.config import ConfigError, load_settings
 from clashcommand.db import LinkedPlayerStore
-from clashcommand.formatting import build_missed_response, normalize_player_name
+from clashcommand.formatting import (
+    build_missed_response,
+    linked_player_name,
+    normalize_player_name,
+    normalize_player_tag,
+)
 from clashcommand.reminders import WarReminderScheduler
 
 
@@ -110,8 +115,8 @@ def build_roster_unlinked_response(clan_members, linked_players=None):
         return "No clan members were returned by the Clash API."
 
     linked_names = {
-        normalize_player_name(player_name)
-        for player_name in linked_players.values()
+        normalize_player_name(linked_player_name(linked_player))
+        for linked_player in linked_players.values()
     }
     unlinked_names = []
 
@@ -174,16 +179,32 @@ class ClashCommandBot(commands.Bot):
 
 
 async def fetch_current_war(bot):
+    return await fetch_current_war_for_guild(bot, None)
+
+
+async def fetch_current_war_for_guild(bot, guild_id):
+    clan_tag = await resolve_clan_tag(bot, guild_id)
+    if clan_tag is None:
+        return None
+
     return await asyncio.to_thread(
         bot.clash_client.get_current_war,
-        bot.settings.clan_tag,
+        clan_tag,
     )
 
 
 async def fetch_clan_members(bot):
+    return await fetch_clan_members_for_guild(bot, None)
+
+
+async def fetch_clan_members_for_guild(bot, guild_id):
+    clan_tag = await resolve_clan_tag(bot, guild_id)
+    if clan_tag is None:
+        return None
+
     return await asyncio.to_thread(
         bot.clash_client.get_clan_members,
-        bot.settings.clan_tag,
+        clan_tag,
     )
 
 
@@ -204,6 +225,33 @@ def has_manage_server_permission(interaction):
     return bool(permissions and permissions.manage_guild)
 
 
+def normalize_clan_tag(clan_tag):
+    normalized = str(clan_tag or "").strip().upper()
+    if not normalized:
+        return ""
+    if not normalized.startswith("#"):
+        normalized = f"#{normalized}"
+    return normalized
+
+
+def no_clan_configured_message():
+    return "No clan is configured for this server. Ask an admin to run /setup clan_tag:<tag>."
+
+
+async def resolve_clan_tag(bot, guild_id):
+    if guild_id is not None:
+        stored_clan_tag = await asyncio.to_thread(
+            bot.linked_player_store.get_clan_tag,
+            guild_id,
+        )
+        stored_clan_tag = normalize_clan_tag(stored_clan_tag)
+        if stored_clan_tag:
+            return stored_clan_tag
+
+    fallback_clan_tag = normalize_clan_tag(bot.settings.clan_tag)
+    return fallback_clan_tag or None
+
+
 async def load_linked_players(bot, guild_id):
     return await asyncio.to_thread(
         bot.linked_player_store.linked_players_for_guild,
@@ -212,24 +260,108 @@ async def load_linked_players(bot, guild_id):
 
 
 async def save_linked_player(bot, guild_id, discord_user_id, player_name):
+    await save_linked_player_record(bot, guild_id, discord_user_id, player_name, None)
+
+
+async def save_linked_player_record(bot, guild_id, discord_user_id, player_name, player_tag):
     await asyncio.to_thread(
         bot.linked_player_store.upsert_linked_player,
         guild_id,
         discord_user_id,
         player_name,
+        player_tag,
     )
+
+
+async def save_reminder_channel(bot, guild_id, channel_id):
+    await asyncio.to_thread(
+        bot.linked_player_store.set_reminder_channel,
+        guild_id,
+        channel_id,
+    )
+
+
+async def save_clan_tag(bot, guild_id, clan_tag):
+    await asyncio.to_thread(
+        bot.linked_player_store.set_clan_tag,
+        guild_id,
+        clan_tag,
+    )
+
+
+async def load_linked_player_rows(bot, guild_id):
+    return await asyncio.to_thread(
+        bot.linked_player_store.linked_player_rows_for_guild,
+        guild_id,
+    )
+
+
+def build_links_response(linked_player_rows):
+    if not linked_player_rows:
+        return "No players are currently linked."
+
+    lines = ["**Linked Players**", ""]
+    for row in linked_player_rows:
+        if row.get("player_tag"):
+            lines.append(f"<@{row['discord_user_id']}> → {row['player_name']} ({row['player_tag']})")
+        else:
+            lines.append(f"<@{row['discord_user_id']}> → {row['player_name']}")
+    return "\n".join(lines)
+
+
+async def resolve_linked_player_input(bot, player_tag=None, player_name=None):
+    normalized_tag = normalize_player_tag(player_tag)
+    cleaned_name = str(player_name or "").strip()
+
+    if not normalized_tag:
+        if cleaned_name:
+            return cleaned_name, None
+        return None, None
+
+    try:
+        player = await asyncio.to_thread(bot.clash_client.get_player, normalized_tag)
+    except Exception:
+        LOGGER.info("Could not resolve Clash player profile for %s; storing tag only.", normalized_tag)
+        return cleaned_name or normalized_tag, normalized_tag
+
+    resolved_name = str(player.get("name") or "").strip()
+    return resolved_name or cleaned_name or normalized_tag, normalized_tag
 
 
 def create_bot(settings):
     bot = ClashCommandBot(settings)
 
+    @bot.tree.command(name="setup", description="Configure this server's Clash clan")
+    async def setup(interaction: discord.Interaction, clan_tag: str):
+        remember_command_channel(bot, interaction)
+        if not has_manage_server_permission(interaction):
+            await interaction.response.send_message(
+                "You need Manage Server permission to use this command."
+            )
+            return
+
+        normalized_clan_tag = normalize_clan_tag(clan_tag)
+        if not normalized_clan_tag:
+            await interaction.response.send_message("Please provide a Clash clan tag.")
+            return
+
+        await save_clan_tag(
+            bot,
+            guild_id_for_interaction(interaction),
+            normalized_clan_tag,
+        )
+        await interaction.response.send_message(
+            f"Configured this server's Clash clan as `{normalized_clan_tag}`."
+        )
+
     @bot.tree.command(name="war", description="Show current Clash of Clans war status.")
     async def war(interaction: discord.Interaction):
         remember_command_channel(bot, interaction)
         await interaction.response.defer(thinking=True)
+        guild_id = guild_id_for_interaction(interaction)
 
         try:
-            current_war = await fetch_current_war(bot)
+            current_war = await fetch_current_war_for_guild(bot, guild_id)
         except ClashApiError as exc:
             await interaction.followup.send(clash_api_error_message(exc))
             return
@@ -238,6 +370,10 @@ def create_bot(settings):
             await interaction.followup.send(
                 f"Unexpected error while fetching current war: {exc}",
             )
+            return
+
+        if current_war is None:
+            await interaction.followup.send(no_clan_configured_message())
             return
 
         await interaction.followup.send(build_war_response(current_war))
@@ -246,9 +382,10 @@ def create_bot(settings):
     async def missed(interaction: discord.Interaction):
         remember_command_channel(bot, interaction)
         await interaction.response.defer(thinking=True)
+        guild_id = guild_id_for_interaction(interaction)
 
         try:
-            current_war = await fetch_current_war(bot)
+            current_war = await fetch_current_war_for_guild(bot, guild_id)
         except ClashApiError as exc:
             await interaction.followup.send(clash_api_error_message(exc))
             return
@@ -259,29 +396,48 @@ def create_bot(settings):
             )
             return
 
-        linked_players = await load_linked_players(bot, guild_id_for_interaction(interaction))
-        await interaction.followup.send(build_missed_response(current_war, linked_players))
-
-    @bot.tree.command(name="link-player", description="Link your Discord user to a Clash player name.")
-    async def link_player(interaction: discord.Interaction, player_name: str):
-        remember_command_channel(bot, interaction)
-        cleaned_name = player_name.strip()
-        if not cleaned_name:
-            await interaction.response.send_message("Please provide a Clash player name.")
+        if current_war is None:
+            await interaction.followup.send(no_clan_configured_message())
             return
 
-        await save_linked_player(
+        linked_players = await load_linked_players(bot, guild_id)
+        await interaction.followup.send(build_missed_response(current_war, linked_players))
+
+    @bot.tree.command(name="link-player", description="Link your Discord user to a Clash player.")
+    async def link_player(
+        interaction: discord.Interaction,
+        player_tag: str = "",
+        player_name: str = "",
+    ):
+        remember_command_channel(bot, interaction)
+        resolved_name, normalized_tag = await resolve_linked_player_input(
+            bot,
+            player_tag=player_tag,
+            player_name=player_name,
+        )
+        if not resolved_name:
+            await interaction.response.send_message("Please provide a Clash player tag or player name.")
+            return
+
+        await save_linked_player_record(
             bot,
             guild_id_for_interaction(interaction),
             str(interaction.user.id),
-            cleaned_name,
+            resolved_name,
+            normalized_tag,
         )
+        display_name = f"{resolved_name} ({normalized_tag})" if normalized_tag else resolved_name
         await interaction.response.send_message(
-            f"Linked {interaction.user.mention} to Clash player '{cleaned_name}'"
+            f"Linked {interaction.user.mention} to Clash player '{display_name}'"
         )
 
-    @bot.tree.command(name="link-member", description="Link another Discord user to a Clash player name.")
-    async def link_member(interaction: discord.Interaction, user: discord.Member, player_name: str):
+    @bot.tree.command(name="link-member", description="Link another Discord user to a Clash player.")
+    async def link_member(
+        interaction: discord.Interaction,
+        user: discord.Member,
+        player_tag: str = "",
+        player_name: str = "",
+    ):
         remember_command_channel(bot, interaction)
         if not has_manage_server_permission(interaction):
             await interaction.response.send_message(
@@ -289,28 +445,68 @@ def create_bot(settings):
             )
             return
 
-        cleaned_name = player_name.strip()
-        if not cleaned_name:
-            await interaction.response.send_message("Please provide a Clash player name.")
+        resolved_name, normalized_tag = await resolve_linked_player_input(
+            bot,
+            player_tag=player_tag,
+            player_name=player_name,
+        )
+        if not resolved_name:
+            await interaction.response.send_message("Please provide a Clash player tag or player name.")
             return
 
-        await save_linked_player(
+        await save_linked_player_record(
             bot,
             guild_id_for_interaction(interaction),
             str(user.id),
-            cleaned_name,
+            resolved_name,
+            normalized_tag,
+        )
+        display_name = f"{resolved_name} ({normalized_tag})" if normalized_tag else resolved_name
+        await interaction.response.send_message(
+            f"Linked {user.mention} to Clash player '{display_name}'"
+        )
+
+    @bot.tree.command(name="links", description="View all linked players in this server")
+    async def links(interaction: discord.Interaction):
+        remember_command_channel(bot, interaction)
+        if not has_manage_server_permission(interaction):
+            await interaction.response.send_message(
+                "You need Manage Server permission to use this command."
+            )
+            return
+
+        linked_player_rows = await load_linked_player_rows(
+            bot,
+            guild_id_for_interaction(interaction),
+        )
+        await interaction.response.send_message(build_links_response(linked_player_rows))
+
+    @bot.tree.command(name="set-channel", description="Set the channel for war reminders")
+    async def set_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+        remember_command_channel(bot, interaction)
+        if not has_manage_server_permission(interaction):
+            await interaction.response.send_message(
+                "You need Manage Server permission to use this command."
+            )
+            return
+
+        await save_reminder_channel(
+            bot,
+            guild_id_for_interaction(interaction),
+            str(channel.id),
         )
         await interaction.response.send_message(
-            f"Linked {user.mention} to Clash player '{cleaned_name}'"
+            f"War reminders will be sent to {channel.mention}."
         )
 
     @bot.tree.command(name="roster-unlinked", description="List clan members not linked to Discord users.")
     async def roster_unlinked(interaction: discord.Interaction):
         remember_command_channel(bot, interaction)
         await interaction.response.defer(thinking=True)
+        guild_id = guild_id_for_interaction(interaction)
 
         try:
-            clan_members = await fetch_clan_members(bot)
+            clan_members = await fetch_clan_members_for_guild(bot, guild_id)
         except ClashApiError as exc:
             await interaction.followup.send(clash_api_error_message(exc))
             return
@@ -321,7 +517,11 @@ def create_bot(settings):
             )
             return
 
-        linked_players = await load_linked_players(bot, guild_id_for_interaction(interaction))
+        if clan_members is None:
+            await interaction.followup.send(no_clan_configured_message())
+            return
+
+        linked_players = await load_linked_players(bot, guild_id)
         await interaction.followup.send(build_roster_unlinked_response(clan_members, linked_players))
 
     return bot
