@@ -3,6 +3,8 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
+from clashcommand.clash.time import parse_coc_time
+from clashcommand.clash.war import stable_war_key
 from fetch_war import fetch_current_war, save_war_snapshot
 
 
@@ -35,10 +37,6 @@ def env_minutes(name, default):
         return default
 
     return minutes
-
-
-def parse_coc_time(value):
-    return datetime.strptime(value, "%Y%m%dT%H%M%S.%fZ").replace(tzinfo=timezone.utc)
 
 
 def format_datetime(value):
@@ -92,18 +90,7 @@ def write_saved_wars(saved_wars):
 
 
 def war_key(data):
-    key_fields = {
-        "clan_tag": data.get("clan", {}).get("tag"),
-        "opponent_tag": data.get("opponent", {}).get("tag"),
-        "preparationStartTime": data.get("preparationStartTime"),
-        "startTime": data.get("startTime"),
-        "endTime": data.get("endTime"),
-    }
-
-    if not any(key_fields.values()):
-        return None
-
-    return json.dumps(key_fields, sort_keys=True, separators=(",", ":"))
+    return stable_war_key(data)
 
 
 def save_final_snapshot(data, saved_wars):

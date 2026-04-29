@@ -1,5 +1,7 @@
 # Operation Guide
 
+For Discord bot deployment on DigitalOcean, see [ClashCommand Droplet Deployment](CLASHCOMMAND_DROPLET_DEPLOY.md).
+
 ## Manual Commands
 
 Set the API token for live API scripts:

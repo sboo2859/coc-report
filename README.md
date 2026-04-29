@@ -2,6 +2,16 @@
 
 Utilities for fetching Clash of Clans current war snapshots.
 
+## Discord Bot Conversion
+
+This project is being planned for conversion into **ClashCommand**, a Discord bot for war accountability and smart reminders. The existing script and static report flow should remain usable while reusable Clash API, war timing, missed-attack, and reporting logic is extracted into a bot-ready package.
+
+Planning docs:
+
+- [Discord Bot Audit](docs/DISCORD_BOT_AUDIT.md)
+- [Discord Bot MVP Plan](docs/DISCORD_BOT_MVP_PLAN.md)
+- [ClashCommand Droplet Deployment](docs/CLASHCOMMAND_DROPLET_DEPLOY.md)
+
 ## System Documentation
 
 - [System Architecture](docs/SYSTEM_ARCHITECTURE.md)

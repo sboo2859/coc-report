@@ -1,0 +1,2 @@
+"""ClashCommand package foundation."""
+

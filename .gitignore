@@ -1,6 +1,12 @@
 # Secrets
 .env
 *.env
+!.env.example
+
+# Virtual environments
+.venv/
+venv/
+env/
 
 # Python
 __pycache__/
@@ -11,10 +17,14 @@ __pycache__/
 *.log
 
 # Local runtime data
+*.sqlite
+*.sqlite3
+*.db
 data/state/
 data/wars/
 data/war_results/
 data/reports/
+clashcommand.sqlite3
 
 # OS/editor
 .DS_Store

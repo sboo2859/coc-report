@@ -3,6 +3,8 @@ import os
 import sys
 from datetime import datetime, timezone
 
+from clashcommand.clash.time import parse_coc_time
+from clashcommand.clash.war import remaining_attack_members
 from fetch_war import fetch_current_war
 
 
@@ -34,10 +36,6 @@ def env_float(name, default):
     except ValueError:
         print(f"Invalid {name}={value!r}; using {default:g}.")
         return default
-
-
-def parse_coc_time(value):
-    return datetime.strptime(value, "%Y%m%dT%H%M%S.%fZ").replace(tzinfo=timezone.utc)
 
 
 def pluralize_attack(count):
@@ -72,29 +70,10 @@ def format_time_left(end_time, target_hours):
 
 
 def members_with_remaining_attacks(war):
-    attacks_allowed = war.get("attacksPerMember", 2)
-    try:
-        attacks_allowed = int(attacks_allowed)
-    except (TypeError, ValueError):
-        attacks_allowed = 2
-
-    members = war.get("clan", {}).get("members", [])
-    if not isinstance(members, list):
-        members = []
-
-    remaining_members = []
-    for member in members:
-        name = member.get("name") or "Unknown"
-        attacks = member.get("attacks", [])
-        if not isinstance(attacks, list):
-            attacks = []
-
-        used_attacks = len(attacks)
-        remaining = max(0, attacks_allowed - used_attacks)
-        if remaining > 0:
-            remaining_members.append((name, remaining))
-
-    return sorted(remaining_members, key=lambda item: (-item[1], item[0].lower()))
+    return [
+        (player["name"], player["remaining"])
+        for player in remaining_attack_members(war)
+    ]
 
 
 def build_warning_message(war, include_counts=True, target_hours=DEFAULT_TARGET_HOURS):

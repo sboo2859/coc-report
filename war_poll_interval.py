@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
+from clashcommand.clash.time import parse_coc_time
 from fetch_war import fetch_current_war
-from schedule_war_snapshot import parse_coc_time
 
 
 ERROR_INTERVAL_SECONDS = 3600
