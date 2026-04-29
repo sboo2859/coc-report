@@ -15,6 +15,7 @@ class Settings:
     clan_tag: str
     db_path: str
     discord_test_guild_id: Optional[int] = None
+    command_sync_mode: str = "both"
 
 
 def load_dotenv(path=".env"):
@@ -66,13 +67,23 @@ def optional_env(name, default):
     return value if value else default
 
 
+def command_sync_mode_env():
+    value = optional_env("COMMAND_SYNC_MODE", "both").lower()
+    allowed_modes = {"global", "guild", "both"}
+    if value not in allowed_modes:
+        allowed = ", ".join(sorted(allowed_modes))
+        raise ConfigError(f"COMMAND_SYNC_MODE must be one of: {allowed}.")
+    return value
+
+
 def load_settings(dotenv_path=".env"):
     load_dotenv(dotenv_path)
 
     return Settings(
         discord_bot_token=required_env("DISCORD_BOT_TOKEN"),
         clash_api_token=required_env("CLASH_API_TOKEN"),
-        clan_tag=required_env("CLAN_TAG"),
+        clan_tag=optional_env("CLAN_TAG", ""),
         db_path=optional_env("CLASHCOMMAND_DB_PATH", "data/clashcommand.sqlite3"),
         discord_test_guild_id=optional_int_env("DISCORD_TEST_GUILD_ID"),
+        command_sync_mode=command_sync_mode_env(),
     )

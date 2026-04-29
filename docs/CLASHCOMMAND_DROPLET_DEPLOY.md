@@ -81,13 +81,15 @@ DISCORD_BOT_TOKEN=your_discord_bot_token
 CLASH_API_TOKEN=your_clash_api_token
 CLAN_TAG="#22YY2LPV2"
 DISCORD_TEST_GUILD_ID=your_test_server_id
+COMMAND_SYNC_MODE=both
 ```
 
 Notes:
 
 - Keep real tokens only in `.env` on the droplet.
 - Do not commit `.env`.
-- `DISCORD_TEST_GUILD_ID` is recommended for MVP because guild-only slash command sync appears quickly.
+- `COMMAND_SYNC_MODE=both` syncs global commands for production and also syncs `DISCORD_TEST_GUILD_ID` for quick test-server updates.
+- Global command updates can take up to about an hour to appear in every server.
 - `CLAN_TAG` should stay quoted because Clash tags begin with `#`.
 
 The old static scripts still use `COC_API_TOKEN` and `COC_CLAN_TAG`. You can set those too if you want to run static scripts on the droplet, but the Discord bot uses `CLASH_API_TOKEN` and `CLAN_TAG`.
@@ -139,6 +141,7 @@ Expected result:
 If `/war` does not appear:
 
 - Confirm `DISCORD_TEST_GUILD_ID` is the Discord server ID, not a channel ID.
+- Confirm `COMMAND_SYNC_MODE` is `both` or `global` for the production clan server.
 - Restart the bot.
 - Confirm the bot was invited with application command scope.
 - Check the manual-run logs for command sync messages.
@@ -251,7 +254,7 @@ Edit `/opt/clashcommand/app/.env`, then restart the service.
 
 Slash command does not show up:
 
-- Use `DISCORD_TEST_GUILD_ID` during MVP.
+- Use `COMMAND_SYNC_MODE=both` to sync production global commands and fast test-guild commands.
 - Restart the bot after changing command code.
 - Confirm the bot invite included application commands.
 
@@ -268,4 +271,3 @@ sudo journalctl -u clashcommand -n 100 --no-pager
 ```
 
 Most early failures are missing env vars, wrong file ownership, or missing venv dependencies.
-

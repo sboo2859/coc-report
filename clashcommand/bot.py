@@ -156,19 +156,28 @@ class ClashCommandBot(commands.Bot):
         await asyncio.to_thread(self.linked_player_store.initialize)
         self.reminder_scheduler.start()
 
-        if self.settings.discord_test_guild_id is None:
+        if self.settings.command_sync_mode in ("global", "both"):
             synced = await self.tree.sync()
             LOGGER.info("Synced %s global slash command(s).", len(synced))
-            return
 
-        guild = discord.Object(id=self.settings.discord_test_guild_id)
-        self.tree.copy_global_to(guild=guild)
-        synced = await self.tree.sync(guild=guild)
-        LOGGER.info(
-            "Synced %s slash command(s) to test guild %s.",
-            len(synced),
-            self.settings.discord_test_guild_id,
-        )
+        if self.settings.command_sync_mode in ("guild", "both"):
+            if self.settings.discord_test_guild_id is None:
+                LOGGER.warning(
+                    "COMMAND_SYNC_MODE=%s requires DISCORD_TEST_GUILD_ID; "
+                    "skipping guild slash command sync.",
+                    self.settings.command_sync_mode,
+                )
+                return
+
+            guild = discord.Object(id=self.settings.discord_test_guild_id)
+            self.tree.copy_global_to(guild=guild)
+            synced = await self.tree.sync(guild=guild)
+            LOGGER.info(
+                "Synced %s slash command(s) to test guild %s.",
+                len(synced),
+                self.settings.discord_test_guild_id,
+            )
+            return
 
     async def on_ready(self):
         LOGGER.info("Logged in as %s (%s).", self.user, self.user.id if self.user else "unknown")
