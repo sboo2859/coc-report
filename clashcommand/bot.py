@@ -7,6 +7,7 @@ import discord
 from discord.ext import commands
 
 from clashcommand.clash.client import ClashApiError, ClashClient
+from clashcommand.clash.time import format_central_time
 from clashcommand.clash.war import current_war_overview
 from clashcommand.config import ConfigError, load_settings
 
@@ -19,12 +20,6 @@ def configure_logging():
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-
-
-def format_datetime(value):
-    if value is None:
-        return "Unavailable"
-    return value.strftime("%Y-%m-%d %H:%M UTC")
 
 
 def format_duration_until(value):
@@ -59,7 +54,7 @@ def build_war_response(war):
 
     if state == "preparation":
         opponent = overview["opponent"]["name"]
-        start_time = format_datetime(overview["start_time"])
+        start_time = format_central_time(overview["start_time"])
         return "\n".join(
             [
                 f"War is in preparation against **{opponent}**.",
@@ -86,7 +81,8 @@ def build_war_response(war):
             f"`{attacks['used_attacks']}/{attacks['possible_attacks']}` used, "
             f"`{attacks['unused_attacks']}` remaining"
         ),
-        f"Ends: `{format_datetime(overview['end_time'])}` ({time_left})",
+        f"Battle started: `{format_central_time(overview['start_time'])}`",
+        f"Ends: `{format_central_time(overview['end_time'])}` ({time_left})",
     ]
 
     remaining_members = attacks["remaining_members"]
