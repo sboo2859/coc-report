@@ -13,6 +13,7 @@ class Settings:
     discord_bot_token: str
     clash_api_token: str
     clan_tag: str
+    db_path: str
     discord_test_guild_id: Optional[int] = None
 
 
@@ -60,6 +61,11 @@ def optional_int_env(name):
         raise ConfigError(f"{name} must be an integer.") from exc
 
 
+def optional_env(name, default):
+    value = os.environ.get(name, "").strip()
+    return value if value else default
+
+
 def load_settings(dotenv_path=".env"):
     load_dotenv(dotenv_path)
 
@@ -67,5 +73,6 @@ def load_settings(dotenv_path=".env"):
         discord_bot_token=required_env("DISCORD_BOT_TOKEN"),
         clash_api_token=required_env("CLASH_API_TOKEN"),
         clan_tag=required_env("CLAN_TAG"),
+        db_path=optional_env("CLASHCOMMAND_DB_PATH", "data/clashcommand.sqlite3"),
         discord_test_guild_id=optional_int_env("DISCORD_TEST_GUILD_ID"),
     )
