@@ -199,6 +199,11 @@ def remember_command_channel(bot, interaction):
     bot.command_channels[str(interaction.guild_id)] = str(interaction.channel_id)
 
 
+def has_manage_server_permission(interaction):
+    permissions = getattr(interaction.user, "guild_permissions", None)
+    return bool(permissions and permissions.manage_guild)
+
+
 async def load_linked_players(bot, guild_id):
     return await asyncio.to_thread(
         bot.linked_player_store.linked_players_for_guild,
@@ -273,6 +278,30 @@ def create_bot(settings):
         )
         await interaction.response.send_message(
             f"Linked {interaction.user.mention} to Clash player '{cleaned_name}'"
+        )
+
+    @bot.tree.command(name="link-member", description="Link another Discord user to a Clash player name.")
+    async def link_member(interaction: discord.Interaction, user: discord.Member, player_name: str):
+        remember_command_channel(bot, interaction)
+        if not has_manage_server_permission(interaction):
+            await interaction.response.send_message(
+                "You need Manage Server permission to use this command."
+            )
+            return
+
+        cleaned_name = player_name.strip()
+        if not cleaned_name:
+            await interaction.response.send_message("Please provide a Clash player name.")
+            return
+
+        await save_linked_player(
+            bot,
+            guild_id_for_interaction(interaction),
+            str(user.id),
+            cleaned_name,
+        )
+        await interaction.response.send_message(
+            f"Linked {user.mention} to Clash player '{cleaned_name}'"
         )
 
     @bot.tree.command(name="roster-unlinked", description="List clan members not linked to Discord users.")
