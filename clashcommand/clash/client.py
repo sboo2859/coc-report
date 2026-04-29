@@ -34,6 +34,21 @@ class ClashClient:
         url = f"{self.BASE_URL}/clans/{encoded_clan_tag}/currentwar"
         response = requests.get(url, headers=self._headers(), timeout=self.timeout)
 
+        return self._json_or_raise(response)
+
+    def get_clan_members(self, clan_tag):
+        import requests
+
+        encoded_clan_tag = quote(clan_tag, safe="")
+        url = f"{self.BASE_URL}/clans/{encoded_clan_tag}/members"
+        response = requests.get(url, headers=self._headers(), timeout=self.timeout)
+        data = self._json_or_raise(response)
+        members = data.get("items", [])
+        if not isinstance(members, list):
+            return []
+        return members
+
+    def _json_or_raise(self, response):
         if response.status_code == 200:
             return response.json()
 
