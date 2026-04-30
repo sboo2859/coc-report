@@ -1,10 +1,11 @@
 import asyncio
 import logging
+import re
 import sys
 from datetime import datetime, timezone
-from typing import Optional
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from clashcommand.clash.client import ClashApiError, ClashClient
@@ -22,6 +23,7 @@ from clashcommand.reminders import WarReminderScheduler
 
 
 LOGGER = logging.getLogger("clashcommand")
+PLAYER_TAG_PATTERN = re.compile(r"^#?[0289PYLQGRJCUV]+$", re.IGNORECASE)
 
 
 def configure_logging():
@@ -35,13 +37,16 @@ def log_synced_commands(scope, synced_commands):
     for command in synced_commands:
         parameters = [
             parameter.name
-            for parameter in getattr(command, "parameters", [])
+            for parameter in (
+                getattr(command, "parameters", None)
+                or getattr(command, "options", [])
+            )
         ]
         LOGGER.info(
-            "Synced slash command %s/%s with parameter(s): %s",
-            scope,
+            "Synced slash command %s with parameter(s): %s (scope: %s)",
             command.name,
             ", ".join(parameters) if parameters else "none",
+            scope,
         )
 
 
@@ -335,22 +340,34 @@ def build_links_response(linked_player_rows):
     return "\n".join(lines)
 
 
-async def resolve_linked_player_input(bot, player_tag=None, player_name=None):
-    normalized_tag = normalize_player_tag(player_tag)
-    cleaned_name = str(player_name or "").strip()
+def looks_like_player_tag(value):
+    cleaned_value = str(value or "").strip()
+    return bool(cleaned_value.startswith("#") or PLAYER_TAG_PATTERN.fullmatch(cleaned_value))
 
-    if not normalized_tag:
-        if cleaned_name:
-            return cleaned_name, None
+
+async def resolve_linked_player_input(bot, value):
+    cleaned_value = str(value or "").strip()
+    if not cleaned_value:
         return None, None
 
-    player = await asyncio.to_thread(bot.clash_client.get_player, normalized_tag)
-    resolved_name = str(player.get("name") or "").strip()
-    return resolved_name or cleaned_name or normalized_tag, normalized_tag
+    if looks_like_player_tag(cleaned_value):
+        normalized_tag = normalize_player_tag(cleaned_value)
+        player = await asyncio.to_thread(bot.clash_client.get_player, normalized_tag)
+        resolved_name = str(player.get("name") or "").strip()
+        return resolved_name or normalized_tag, normalized_tag
+
+    return cleaned_value, None
+
+
+def linked_player_response(resolved_name, normalized_tag):
+    if normalized_tag:
+        return f"Linked to {resolved_name} ({normalized_tag})"
+    return f"Linked to {resolved_name} (name-based link — tags are more reliable)"
 
 
 def create_bot(settings):
     bot = ClashCommandBot(settings)
+    tree = bot.tree
 
     @bot.tree.command(name="setup", description="Configure this server's Clash clan")
     async def setup(interaction: discord.Interaction, clan_tag: str):
@@ -424,18 +441,20 @@ def create_bot(settings):
         linked_players = await load_linked_players(bot, guild_id)
         await interaction.followup.send(build_missed_response(current_war, linked_players))
 
-    @bot.tree.command(name="link-player", description="Link your Discord user to a Clash player.")
+    @tree.command(
+        name="link-player",
+        description="Link your Clash account (#TAG or name)",
+    )
+    @app_commands.describe(input="Player tag (recommended) or player name")
     async def link_player(
         interaction: discord.Interaction,
-        player_tag: Optional[str] = None,
-        player_name: Optional[str] = None,
+        input: str,
     ):
         remember_command_channel(bot, interaction)
         try:
             resolved_name, normalized_tag = await resolve_linked_player_input(
                 bot,
-                player_tag=player_tag,
-                player_name=player_name,
+                input,
             )
             if not resolved_name:
                 await interaction.response.send_message(
@@ -461,17 +480,19 @@ def create_bot(settings):
             )
             return
 
-        display_name = f"{resolved_name} ({normalized_tag})" if normalized_tag else resolved_name
-        await interaction.response.send_message(
-            f"Linked {interaction.user.mention} to Clash player '{display_name}'"
-        )
+        await interaction.response.send_message(linked_player_response(resolved_name, normalized_tag))
 
-    @bot.tree.command(name="link-member", description="Link another Discord user to a Clash player.")
+    @bot.tree.command(
+        name="link-member",
+        description=(
+            "Link a Discord member using a Clash player tag (recommended) or player name. "
+            "Example: #ABC123"
+        ),
+    )
     async def link_member(
         interaction: discord.Interaction,
         user: discord.Member,
-        player_tag: Optional[str] = None,
-        player_name: Optional[str] = None,
+        input: str,
     ):
         remember_command_channel(bot, interaction)
         if not has_manage_server_permission(interaction):
@@ -483,8 +504,7 @@ def create_bot(settings):
         try:
             resolved_name, normalized_tag = await resolve_linked_player_input(
                 bot,
-                player_tag=player_tag,
-                player_name=player_name,
+                input,
             )
             if not resolved_name:
                 await interaction.response.send_message(
@@ -511,9 +531,8 @@ def create_bot(settings):
             )
             return
 
-        display_name = f"{resolved_name} ({normalized_tag})" if normalized_tag else resolved_name
         await interaction.response.send_message(
-            f"Linked {user.mention} to Clash player '{display_name}'"
+            f"Linked {user.mention}: {linked_player_response(resolved_name, normalized_tag)}"
         )
 
     @bot.tree.command(name="links", description="View all linked players in this server")
