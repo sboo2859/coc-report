@@ -2,6 +2,7 @@ import asyncio
 import logging
 import sys
 from datetime import datetime, timezone
+from typing import Optional
 
 import discord
 from discord.ext import commands
@@ -28,6 +29,20 @@ def configure_logging():
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+
+def log_synced_commands(scope, synced_commands):
+    for command in synced_commands:
+        parameters = [
+            parameter.name
+            for parameter in getattr(command, "parameters", [])
+        ]
+        LOGGER.info(
+            "Synced slash command %s/%s with parameter(s): %s",
+            scope,
+            command.name,
+            ", ".join(parameters) if parameters else "none",
+        )
 
 
 def format_duration_until(value):
@@ -159,6 +174,7 @@ class ClashCommandBot(commands.Bot):
         if self.settings.command_sync_mode in ("global", "both"):
             synced = await self.tree.sync()
             LOGGER.info("Synced %s global slash command(s).", len(synced))
+            log_synced_commands("global", synced)
 
         if self.settings.command_sync_mode in ("guild", "both"):
             if self.settings.discord_test_guild_id is None:
@@ -177,6 +193,7 @@ class ClashCommandBot(commands.Bot):
                 len(synced),
                 self.settings.discord_test_guild_id,
             )
+            log_synced_commands(f"guild:{self.settings.discord_test_guild_id}", synced)
             return
 
     async def on_ready(self):
@@ -327,12 +344,7 @@ async def resolve_linked_player_input(bot, player_tag=None, player_name=None):
             return cleaned_name, None
         return None, None
 
-    try:
-        player = await asyncio.to_thread(bot.clash_client.get_player, normalized_tag)
-    except Exception:
-        LOGGER.info("Could not resolve Clash player profile for %s; storing tag only.", normalized_tag)
-        return cleaned_name or normalized_tag, normalized_tag
-
+    player = await asyncio.to_thread(bot.clash_client.get_player, normalized_tag)
     resolved_name = str(player.get("name") or "").strip()
     return resolved_name or cleaned_name or normalized_tag, normalized_tag
 
@@ -415,26 +427,40 @@ def create_bot(settings):
     @bot.tree.command(name="link-player", description="Link your Discord user to a Clash player.")
     async def link_player(
         interaction: discord.Interaction,
-        player_tag: str = "",
-        player_name: str = "",
+        player_tag: Optional[str] = None,
+        player_name: Optional[str] = None,
     ):
         remember_command_channel(bot, interaction)
-        resolved_name, normalized_tag = await resolve_linked_player_input(
-            bot,
-            player_tag=player_tag,
-            player_name=player_name,
-        )
-        if not resolved_name:
-            await interaction.response.send_message("Please provide a Clash player tag or player name.")
+        try:
+            resolved_name, normalized_tag = await resolve_linked_player_input(
+                bot,
+                player_tag=player_tag,
+                player_name=player_name,
+            )
+            if not resolved_name:
+                await interaction.response.send_message(
+                    "Please provide a player tag (recommended) or player name."
+                )
+                return
+
+            await save_linked_player_record(
+                bot,
+                guild_id_for_interaction(interaction),
+                str(interaction.user.id),
+                resolved_name,
+                normalized_tag,
+            )
+        except Exception:
+            LOGGER.exception(
+                "Could not link player for user %s in guild %s.",
+                getattr(interaction.user, "id", "unknown"),
+                interaction.guild_id,
+            )
+            await interaction.response.send_message(
+                "Could not link player. Please check the tag/name and try again."
+            )
             return
 
-        await save_linked_player_record(
-            bot,
-            guild_id_for_interaction(interaction),
-            str(interaction.user.id),
-            resolved_name,
-            normalized_tag,
-        )
         display_name = f"{resolved_name} ({normalized_tag})" if normalized_tag else resolved_name
         await interaction.response.send_message(
             f"Linked {interaction.user.mention} to Clash player '{display_name}'"
@@ -444,8 +470,8 @@ def create_bot(settings):
     async def link_member(
         interaction: discord.Interaction,
         user: discord.Member,
-        player_tag: str = "",
-        player_name: str = "",
+        player_tag: Optional[str] = None,
+        player_name: Optional[str] = None,
     ):
         remember_command_channel(bot, interaction)
         if not has_manage_server_permission(interaction):
@@ -454,22 +480,37 @@ def create_bot(settings):
             )
             return
 
-        resolved_name, normalized_tag = await resolve_linked_player_input(
-            bot,
-            player_tag=player_tag,
-            player_name=player_name,
-        )
-        if not resolved_name:
-            await interaction.response.send_message("Please provide a Clash player tag or player name.")
+        try:
+            resolved_name, normalized_tag = await resolve_linked_player_input(
+                bot,
+                player_tag=player_tag,
+                player_name=player_name,
+            )
+            if not resolved_name:
+                await interaction.response.send_message(
+                    "Please provide a player tag (recommended) or player name."
+                )
+                return
+
+            await save_linked_player_record(
+                bot,
+                guild_id_for_interaction(interaction),
+                str(user.id),
+                resolved_name,
+                normalized_tag,
+            )
+        except Exception:
+            LOGGER.exception(
+                "Could not link member %s for user %s in guild %s.",
+                getattr(user, "id", "unknown"),
+                getattr(interaction.user, "id", "unknown"),
+                interaction.guild_id,
+            )
+            await interaction.response.send_message(
+                "Could not link player. Please check the tag/name and try again."
+            )
             return
 
-        await save_linked_player_record(
-            bot,
-            guild_id_for_interaction(interaction),
-            str(user.id),
-            resolved_name,
-            normalized_tag,
-        )
         display_name = f"{resolved_name} ({normalized_tag})" if normalized_tag else resolved_name
         await interaction.response.send_message(
             f"Linked {user.mention} to Clash player '{display_name}'"
