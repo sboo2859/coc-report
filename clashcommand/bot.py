@@ -445,16 +445,16 @@ def create_bot(settings):
         name="link-player",
         description="Link your Clash account (#TAG or name)",
     )
-    @app_commands.describe(input="Player tag (recommended) or player name")
+    @app_commands.describe(player_name="Player name or tag, e.g. bustaboo or #ABC123")
     async def link_player(
         interaction: discord.Interaction,
-        input: str,
+        player_name: str,
     ):
         remember_command_channel(bot, interaction)
         try:
             resolved_name, normalized_tag = await resolve_linked_player_input(
                 bot,
-                input,
+                player_name,
             )
             if not resolved_name:
                 await interaction.response.send_message(
@@ -489,10 +489,11 @@ def create_bot(settings):
             "Example: #ABC123"
         ),
     )
+    @app_commands.describe(player_name="Player name or tag, e.g. bustaboo or #ABC123")
     async def link_member(
         interaction: discord.Interaction,
         user: discord.Member,
-        input: str,
+        player_name: str,
     ):
         remember_command_channel(bot, interaction)
         if not has_manage_server_permission(interaction):
@@ -504,7 +505,7 @@ def create_bot(settings):
         try:
             resolved_name, normalized_tag = await resolve_linked_player_input(
                 bot,
-                input,
+                player_name,
             )
             if not resolved_name:
                 await interaction.response.send_message(
