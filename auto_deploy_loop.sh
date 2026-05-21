@@ -12,6 +12,11 @@ stop_loop() {
 }
 
 deploy_once() {
+  log "Refreshing latest current war snapshot..."
+  if ! python3 fetch_current_war_snapshot.py; then
+    log "Current war snapshot refresh failed; building from the latest saved snapshot if available."
+  fi
+
   log "Building CoC report site..."
   if ! python3 build_site.py --include-current-war; then
     log "Build failed; will retry after the next sleep interval."

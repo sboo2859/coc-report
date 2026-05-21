@@ -154,6 +154,22 @@ If `/war` does not appear:
 - Confirm the bot was invited with application command scope.
 - Check the manual-run logs for command sync messages.
 
+## 7a. Confirm CWL Commands Work
+
+In your Discord test server:
+
+1. Type `/cwl`.
+2. Run `/cwl-war`.
+3. Run `/cwl-missed`.
+
+Expected result:
+
+- If CWL is active, `/cwl` shows league group status, season, and available war tags.
+- `/cwl-war` shows the current, next, or latest CWL matchup for the configured clan.
+- `/cwl-missed` lists remaining CWL attacks for the configured clan when battle day is active.
+- If no CWL season is active, the bot says no active CWL season is available.
+- If war tags are not available yet, the bot says so instead of failing.
+
 ## 8. Create A systemd Service
 
 After manual testing works, create a service so the bot restarts automatically.

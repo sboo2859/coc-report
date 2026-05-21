@@ -36,6 +36,24 @@ class ClashClient:
 
         return self._json_or_raise(response)
 
+    def get_cwl_league_group(self, clan_tag):
+        import requests
+
+        encoded_clan_tag = quote(clan_tag, safe="")
+        url = f"{self.BASE_URL}/clans/{encoded_clan_tag}/currentwar/leaguegroup"
+        response = requests.get(url, headers=self._headers(), timeout=self.timeout)
+
+        return self._json_or_raise(response)
+
+    def get_cwl_war(self, war_tag):
+        import requests
+
+        encoded_war_tag = quote(war_tag, safe="")
+        url = f"{self.BASE_URL}/clanwarleagues/wars/{encoded_war_tag}"
+        response = requests.get(url, headers=self._headers(), timeout=self.timeout)
+
+        return self._json_or_raise(response)
+
     def get_clan_members(self, clan_tag):
         import requests
 

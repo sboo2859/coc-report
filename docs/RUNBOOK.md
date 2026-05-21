@@ -254,6 +254,18 @@ systemctl restart clashcommand
 journalctl -u clashcommand -n 100 --no-pager
 ```
 
+Useful command checks in Discord:
+
+```text
+/war
+/missed
+/cwl
+/cwl-war
+/cwl-missed
+```
+
+The CWL commands are read-only. They do not schedule CWL reminders and do not change regular war reminders.
+
 Service file:
 
 ```text
@@ -521,4 +533,9 @@ TODO:
 - Standardize token names to `CLASH_API_TOKEN` and `CLAN_TAG` everywhere.
 - Remove or archive duplicate/obsolete deploy automation after confirming no one uses it.
 - Consider making the updater refresh `data/current_war/latest_current_war.json` before each build if it does not already.
+- Add CWL reminders after command behavior is stable:
+  - remind 3h before CWL war ends
+  - remind 1h before CWL war ends
+  - avoid duplicate reminder spam
+  - use separate reminder keys from regular wars
 - Add clan activity/member snapshots later.

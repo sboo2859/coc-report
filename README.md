@@ -13,6 +13,8 @@ Cloudflare Pages          -> serves committed static files
 
 For recovery and operator commands, start with [CoC Report Runbook](docs/RUNBOOK.md).
 
+Current Discord bot commands include regular war commands (`/war`, `/missed`) and read-only CWL visibility commands (`/cwl`, `/cwl-war`, `/cwl-missed`). CWL reminders are not automated yet.
+
 ## Discord Bot Conversion
 
 This project is being planned for conversion into **ClashCommand**, a Discord bot for war accountability and smart reminders. The existing script and static report flow should remain usable while reusable Clash API, war timing, missed-attack, and reporting logic is extracted into a bot-ready package.

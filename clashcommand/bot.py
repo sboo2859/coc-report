@@ -9,7 +9,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from clashcommand.clash.client import ClashApiError, ClashClient
-from clashcommand.clash.time import format_central_time
+from clashcommand.clash.time import format_central_time, parse_optional_coc_time
 from clashcommand.clash.war import current_war_overview
 from clashcommand.config import ConfigError, load_settings
 from clashcommand.db import LinkedPlayerStore
@@ -153,6 +153,206 @@ def build_roster_unlinked_response(clan_members, linked_players=None):
     return "\n".join(["⚠️ Unlinked Players:", *unlinked_names])
 
 
+def cwl_group_war_tags(group):
+    tags = []
+    rounds = group.get("rounds", [])
+    if not isinstance(rounds, list):
+        return tags
+
+    for round_index, round_data in enumerate(rounds, start=1):
+        war_tags = round_data.get("warTags", [])
+        if not isinstance(war_tags, list):
+            continue
+
+        for war_tag in war_tags:
+            if war_tag and war_tag != "#0":
+                tags.append((round_index, war_tag))
+
+    return tags
+
+
+def cwl_clan_entry(group, clan_tag):
+    normalized_tag = normalize_clan_tag(clan_tag)
+    clans = group.get("clans", [])
+    if not isinstance(clans, list):
+        return None
+
+    for clan in clans:
+        if normalize_clan_tag(clan.get("tag")) == normalized_tag:
+            return clan
+    return None
+
+
+def cwl_war_side(war, clan_tag):
+    normalized_tag = normalize_clan_tag(clan_tag)
+    for side_name in ("clan", "opponent"):
+        side = war.get(side_name, {})
+        if normalize_clan_tag(side.get("tag")) == normalized_tag:
+            return side_name, side
+    return None, None
+
+
+def cwl_opponent_side(war, clan_tag):
+    side_name, our_side = cwl_war_side(war, clan_tag)
+    if side_name == "clan":
+        return our_side, war.get("opponent", {})
+    if side_name == "opponent":
+        return our_side, war.get("clan", {})
+    return None, None
+
+
+def cwl_attacks_summary(war, clan_tag):
+    our_side, _opponent = cwl_opponent_side(war, clan_tag)
+    if not our_side:
+        return None
+
+    attacks_allowed = war.get("attacksPerMember", 1)
+    if not isinstance(attacks_allowed, int) or attacks_allowed <= 0:
+        attacks_allowed = 1
+
+    remaining_members = []
+    members = our_side.get("members", [])
+    if not isinstance(members, list):
+        members = []
+
+    for member in members:
+        attacks = member.get("attacks", [])
+        if not isinstance(attacks, list):
+            attacks = []
+        remaining = max(0, attacks_allowed - len(attacks))
+        if remaining:
+            remaining_members.append(
+                {
+                    "name": member.get("name") or "Unknown",
+                    "remaining": remaining,
+                }
+            )
+
+    remaining_members.sort(key=lambda player: (-player["remaining"], player["name"].lower()))
+    possible_attacks = len(members) * attacks_allowed
+    used_attacks = possible_attacks - sum(player["remaining"] for player in remaining_members)
+
+    return {
+        "attacks_allowed": attacks_allowed,
+        "used_attacks": used_attacks,
+        "possible_attacks": possible_attacks,
+        "remaining_members": remaining_members,
+    }
+
+
+def build_cwl_group_response(group, clan_tag):
+    state = group.get("state", "unknown")
+    season = group.get("season") or "Unavailable"
+    war_tags = cwl_group_war_tags(group)
+    clan = cwl_clan_entry(group, clan_tag)
+
+    lines = [
+        "**Clan War League**",
+        f"State: `{state}`",
+        f"Season: `{season}`",
+        f"Rounds with war tags: `{len({round_index for round_index, _tag in war_tags})}`",
+        f"Available war tags: `{len(war_tags)}`",
+    ]
+
+    if clan:
+        lines.extend(
+            [
+                "",
+                f"Clan: **{clan.get('name', 'Unknown')}** (`{clan.get('tag', clan_tag)}`)",
+            ]
+        )
+    else:
+        lines.extend(["", f"Configured clan `{clan_tag}` was not found in this CWL group."])
+
+    if not war_tags:
+        lines.extend(["", "No CWL war tags are available yet."])
+    else:
+        preview = ", ".join(f"R{round_index}:{war_tag}" for round_index, war_tag in war_tags[:7])
+        lines.extend(["", f"War tags: `{preview}`"])
+
+    return "\n".join(lines)
+
+
+def build_cwl_war_response(war, clan_tag, round_index=None):
+    our_side, opponent = cwl_opponent_side(war, clan_tag)
+    if not our_side:
+        return f"Configured clan `{clan_tag}` was not found in this CWL war."
+
+    state = war.get("state", "unknown")
+    attacks = cwl_attacks_summary(war, clan_tag)
+    time_left = format_duration_until(war_end_time(war))
+
+    lines = [
+        "**CWL War**" if round_index is None else f"**CWL War - Round {round_index}**",
+        f"**{our_side.get('name', 'Clan')} vs {opponent.get('name', 'Opponent')}**",
+        f"State: `{state}`",
+        f"Score: `{our_side.get('stars', 0)}-{opponent.get('stars', 0)}` stars",
+        (
+            "Destruction: "
+            f"`{format_percent(our_side.get('destructionPercentage'))}` / "
+            f"`{format_percent(opponent.get('destructionPercentage'))}`"
+        ),
+        f"Battle started: `{format_central_time(war_start_time(war))}`",
+        f"Ends: `{format_central_time(war_end_time(war))}` ({time_left})",
+    ]
+
+    if attacks:
+        lines.append(
+            "Attacks: "
+            f"`{attacks['used_attacks']}/{attacks['possible_attacks']}` used"
+        )
+
+    return "\n".join(lines)
+
+
+def build_cwl_missed_response(war, clan_tag):
+    our_side, opponent = cwl_opponent_side(war, clan_tag)
+    if not our_side:
+        return f"Configured clan `{clan_tag}` was not found in this CWL war."
+
+    state = war.get("state", "unknown")
+    if state not in {"inWar", "warEnded"}:
+        return f"CWL war against **{opponent.get('name', 'Opponent')}** is `{state}`; attacks are not active yet."
+
+    attacks = cwl_attacks_summary(war, clan_tag)
+    if not attacks:
+        return "Could not read attacks for the configured clan in this CWL war."
+
+    lines = [
+        f"**CWL attacks remaining: {our_side.get('name', 'Clan')} vs {opponent.get('name', 'Opponent')}**",
+        f"State: `{state}`",
+        f"Attacks: `{attacks['used_attacks']}/{attacks['possible_attacks']}` used",
+        "",
+    ]
+
+    if not attacks["remaining_members"]:
+        lines.append("Everyone has used their CWL attack.")
+        return "\n".join(lines)
+
+    lines.append("**Members with attacks remaining:**")
+    for player in attacks["remaining_members"][:25]:
+        attack_label = "attack" if player["remaining"] == 1 else "attacks"
+        lines.append(f"- {player['name']}: {player['remaining']} {attack_label}")
+
+    extra_count = len(attacks["remaining_members"]) - 25
+    if extra_count > 0:
+        lines.append(f"- and {extra_count} more")
+
+    return "\n".join(lines)
+
+
+def parse_coc_time_or_none(value):
+    return parse_optional_coc_time(value)
+
+
+def war_start_time(war):
+    return parse_coc_time_or_none(war.get("startTime"))
+
+
+def war_end_time(war):
+    return parse_coc_time_or_none(war.get("endTime"))
+
+
 def clash_api_error_message(exc):
     if exc.is_access_denied:
         return (
@@ -237,6 +437,48 @@ async def fetch_clan_members_for_guild(bot, guild_id):
         bot.clash_client.get_clan_members,
         clan_tag,
     )
+
+
+async def fetch_cwl_group_for_guild(bot, guild_id):
+    clan_tag = await resolve_clan_tag(bot, guild_id)
+    if clan_tag is None:
+        return None, None
+
+    group = await asyncio.to_thread(
+        bot.clash_client.get_cwl_league_group,
+        clan_tag,
+    )
+    return clan_tag, group
+
+
+async def fetch_best_cwl_war_for_guild(bot, guild_id):
+    clan_tag, group = await fetch_cwl_group_for_guild(bot, guild_id)
+    if group is None:
+        return clan_tag, group, None, None
+
+    for round_index, war_tag in cwl_group_war_tags(group):
+        try:
+            war = await asyncio.to_thread(bot.clash_client.get_cwl_war, war_tag)
+        except ClashApiError as exc:
+            LOGGER.warning("Could not fetch CWL war %s: %s", war_tag, exc)
+            continue
+        side_name, _side = cwl_war_side(war, clan_tag)
+        if side_name is None:
+            continue
+        if war.get("state") in {"inWar", "preparation"}:
+            return clan_tag, group, war, round_index
+
+    for round_index, war_tag in reversed(cwl_group_war_tags(group)):
+        try:
+            war = await asyncio.to_thread(bot.clash_client.get_cwl_war, war_tag)
+        except ClashApiError as exc:
+            LOGGER.warning("Could not fetch CWL war %s: %s", war_tag, exc)
+            continue
+        side_name, _side = cwl_war_side(war, clan_tag)
+        if side_name is not None:
+            return clan_tag, group, war, round_index
+
+    return clan_tag, group, None, None
 
 
 def guild_id_for_interaction(interaction):
@@ -440,6 +682,98 @@ def create_bot(settings):
 
         linked_players = await load_linked_players(bot, guild_id)
         await interaction.followup.send(build_missed_response(current_war, linked_players))
+
+    @bot.tree.command(name="cwl", description="Show current Clan War League group status.")
+    async def cwl(interaction: discord.Interaction):
+        remember_command_channel(bot, interaction)
+        await interaction.response.defer(thinking=True)
+        guild_id = guild_id_for_interaction(interaction)
+
+        try:
+            clan_tag, group = await fetch_cwl_group_for_guild(bot, guild_id)
+        except ClashApiError as exc:
+            await interaction.followup.send(clash_api_error_message(exc))
+            return
+        except Exception as exc:
+            LOGGER.exception("Unexpected error while fetching CWL league group.")
+            await interaction.followup.send(
+                f"Unexpected error while fetching CWL league group: {exc}",
+            )
+            return
+
+        if group is None:
+            await interaction.followup.send(no_clan_configured_message())
+            return
+
+        if group.get("state") == "notInWar":
+            await interaction.followup.send("No active CWL season is currently available for this clan.")
+            return
+
+        await interaction.followup.send(build_cwl_group_response(group, clan_tag))
+
+    @bot.tree.command(name="cwl-war", description="Show the current or next CWL war matchup.")
+    async def cwl_war(interaction: discord.Interaction):
+        remember_command_channel(bot, interaction)
+        await interaction.response.defer(thinking=True)
+        guild_id = guild_id_for_interaction(interaction)
+
+        try:
+            clan_tag, group, war, round_index = await fetch_best_cwl_war_for_guild(bot, guild_id)
+        except ClashApiError as exc:
+            await interaction.followup.send(clash_api_error_message(exc))
+            return
+        except Exception as exc:
+            LOGGER.exception("Unexpected error while fetching CWL war.")
+            await interaction.followup.send(
+                f"Unexpected error while fetching CWL war: {exc}",
+            )
+            return
+
+        if group is None:
+            await interaction.followup.send(no_clan_configured_message())
+            return
+
+        if group.get("state") == "notInWar":
+            await interaction.followup.send("No active CWL season is currently available for this clan.")
+            return
+
+        if war is None:
+            await interaction.followup.send("No CWL war tags are available for this clan yet.")
+            return
+
+        await interaction.followup.send(build_cwl_war_response(war, clan_tag, round_index))
+
+    @bot.tree.command(name="cwl-missed", description="List CWL players with attacks remaining.")
+    async def cwl_missed(interaction: discord.Interaction):
+        remember_command_channel(bot, interaction)
+        await interaction.response.defer(thinking=True)
+        guild_id = guild_id_for_interaction(interaction)
+
+        try:
+            clan_tag, group, war, _round_index = await fetch_best_cwl_war_for_guild(bot, guild_id)
+        except ClashApiError as exc:
+            await interaction.followup.send(clash_api_error_message(exc))
+            return
+        except Exception as exc:
+            LOGGER.exception("Unexpected error while fetching CWL missed attacks.")
+            await interaction.followup.send(
+                f"Unexpected error while fetching CWL missed attacks: {exc}",
+            )
+            return
+
+        if group is None:
+            await interaction.followup.send(no_clan_configured_message())
+            return
+
+        if group.get("state") == "notInWar":
+            await interaction.followup.send("No active CWL season is currently available for this clan.")
+            return
+
+        if war is None:
+            await interaction.followup.send("No CWL war tags are available for this clan yet.")
+            return
+
+        await interaction.followup.send(build_cwl_missed_response(war, clan_tag))
 
     @tree.command(
         name="link-player",

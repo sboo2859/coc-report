@@ -1308,6 +1308,23 @@ def build_current_war_html(war=None, generated_at=None):
         war_timing = '<p class="empty">Current war data unavailable.</p>'
         remaining_attacks = '<p class="empty">Current war data unavailable.</p>'
         warning_message = "Current war data unavailable."
+    elif war.get("state") == "notInWar":
+        title = "No Active War"
+        subtitle = "No active war is available from the Clash API right now."
+        state_text = "notInWar"
+        stat_cards = render_current_war_stat_cards(
+            {"state": "notInWar", "clan": {}, "opponent": {}},
+            {
+                "used_attacks": 0,
+                "possible_attacks": 0,
+                "unused_attacks": 0,
+                "remaining_members": [],
+            },
+            "Unavailable",
+        )
+        war_timing = '<p class="empty">No active war is currently in progress.</p>'
+        remaining_attacks = '<p class="empty">No active war is currently in progress.</p>'
+        warning_message = "No active war is currently in progress."
     else:
         clan = war.get("clan", {})
         opponent = war.get("opponent", {})
