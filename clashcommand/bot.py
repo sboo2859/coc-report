@@ -19,6 +19,11 @@ from clashcommand.formatting import (
     normalize_player_name,
     normalize_player_tag,
 )
+from clashcommand.post_war_reports import (
+    PostWarReportScheduler,
+    build_post_war_report,
+    latest_war_snapshot,
+)
 from clashcommand.reminders import WarReminderScheduler
 
 
@@ -371,10 +376,12 @@ class ClashCommandBot(commands.Bot):
         self.linked_player_store = LinkedPlayerStore(settings.db_path)
         self.command_channels = {}
         self.reminder_scheduler = WarReminderScheduler(self)
+        self.post_war_report_scheduler = PostWarReportScheduler(self)
 
     async def setup_hook(self):
         await asyncio.to_thread(self.linked_player_store.initialize)
         self.reminder_scheduler.start()
+        self.post_war_report_scheduler.start()
 
         if self.settings.command_sync_mode in ("global", "both"):
             synced = await self.tree.sync()
@@ -406,6 +413,7 @@ class ClashCommandBot(commands.Bot):
 
     async def close(self):
         self.reminder_scheduler.shutdown()
+        self.post_war_report_scheduler.shutdown()
         await super().close()
 
 
@@ -682,6 +690,27 @@ def create_bot(settings):
 
         linked_players = await load_linked_players(bot, guild_id)
         await interaction.followup.send(build_missed_response(current_war, linked_players))
+
+    @bot.tree.command(name="latest-war-recap", description="Show the latest completed regular war recap.")
+    async def latest_war_recap(interaction: discord.Interaction):
+        remember_command_channel(bot, interaction)
+        await interaction.response.defer(thinking=True)
+        guild_id = guild_id_for_interaction(interaction)
+        clan_tag = await resolve_clan_tag(bot, guild_id)
+
+        if clan_tag is None:
+            await interaction.followup.send(no_clan_configured_message())
+            return
+
+        _path, war = await asyncio.to_thread(
+            latest_war_snapshot,
+            clan_tag=clan_tag,
+        )
+        if war is None:
+            await interaction.followup.send("No completed regular war snapshots were found for this clan.")
+            return
+
+        await interaction.followup.send(build_post_war_report(war))
 
     @bot.tree.command(name="cwl", description="Show current Clan War League group status.")
     async def cwl(interaction: discord.Interaction):

@@ -49,6 +49,8 @@ The duplicate `coc-report-deploy.timer` path was disabled on the Droplet. Keep o
 
 `clashcommand/bot.py` registers Discord slash commands. Regular war commands use `/war` and `/missed`. CWL read-only commands use `/cwl`, `/cwl-war`, and `/cwl-missed`, fetching CWL data live from the Clash API without changing regular war reminder behavior.
 
+`clashcommand/post_war_reports.py` watches `data/war_results/final_war_*.json` from inside the Discord bot process and posts regular-war recaps to the configured reminder channel. It marks existing snapshots as seen on startup so deploying the bot does not spam old wars.
+
 `war_warning_message.py` fetches the live current war and prints a copy/paste reminder for members with attacks remaining. It does not store data or send notifications.
 
 `weekly_report.py` reads saved final snapshots from `data/war_results/` and builds weekly and all-time historical reports. These reports include full roster tables with member attacks, stars, and average attack destruction. It does not call the Clash API for saved-snapshot reporting.
@@ -162,6 +164,8 @@ The history page uses the same saved final snapshots but includes all deduped wa
 When `build_site.py --include-current-war` is used, `build_site.py` first loads `data/current_war/latest_current_war.json`. If `--live-current-war-fallback` is passed and the snapshot is unavailable, it calls `fetch_current_war()` once at build time. If current-war data is available, `site_output/current-war.html` contains the current state, timing, attack usage, remaining attacks, and a copy/paste warning message. If current-war data is unavailable, the page is still generated with an unavailable-data message.
 
 The production Droplet updater is `coc-report-updater.timer`, which runs `update_coc_report.sh` every 15 minutes. That script must call `build_site.py --include-current-war --live-current-war-fallback` so the current-war page can use the Droplet's allowlisted IP when `data/current_war/latest_current_war.json` is missing. Local deploy scripts are still available for manual operation. Deploy automation should only stage `site_output/`, so runtime data directories remain outside deploy commits.
+
+Coc-war-snapshot writes completed regular-war JSON files. The bot's post-war reporter scans those files every five minutes, posts only newly detected wars after bot startup, and records sent recaps in SQLite using `reminder_events` with reminder type `post_war_report`.
 
 CWL reminders are intentionally not automated yet. Future CWL reminders should use separate reminder keys from regular wars and avoid duplicate reminder spam.
 

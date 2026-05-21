@@ -259,12 +259,22 @@ Useful command checks in Discord:
 ```text
 /war
 /missed
+/latest-war-recap
 /cwl
 /cwl-war
 /cwl-missed
 ```
 
-The CWL commands are read-only. They do not schedule CWL reminders and do not change regular war reminders.
+`/latest-war-recap` manually shows the latest completed regular-war recap without changing post-war-report dedupe. The CWL commands are read-only. They do not schedule CWL reminders and do not change regular war reminders.
+
+Automatic post-war reports:
+
+- The bot scans `data/war_results/final_war_*.json` every five minutes.
+- Existing snapshots are marked seen at bot startup to avoid posting old wars after deploy.
+- New completed regular wars are posted to the configured reminder channel.
+- Dedupe uses SQLite `reminder_events` with reminder type `post_war_report`.
+- If `REPORT_SITE_URL` is set in the bot environment, the recap includes that link.
+- CWL files are not included.
 
 Service file:
 
@@ -519,6 +529,7 @@ If the updater reports no changes, the rebuilt `site_output/` matched the commit
 - `data/wars/` and `data/war_results/` are different. Reports use `data/war_results/`.
 - Current war data and final war report data are separate paths.
 - CWL snapshots are separate from regular war snapshots and are not used by public reports yet.
+- Automatic Discord post-war reports are regular-war only and read from `data/war_results/`.
 - The Droplet interactive shell does not automatically load `.env`.
 - `CLASH_API_TOKEN`/`CLAN_TAG` and `COC_API_TOKEN`/`COC_CLAN_TAG` naming still needs cleanup.
 - `coc-report-deploy.timer` is duplicate automation and was disabled on the Droplet.

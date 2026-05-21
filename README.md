@@ -13,7 +13,7 @@ Cloudflare Pages          -> serves committed static files
 
 For recovery and operator commands, start with [CoC Report Runbook](docs/RUNBOOK.md).
 
-Current Discord bot commands include regular war commands (`/war`, `/missed`) and read-only CWL visibility commands (`/cwl`, `/cwl-war`, `/cwl-missed`). CWL reminders are not automated yet.
+Current Discord bot commands include regular war commands (`/war`, `/missed`, `/latest-war-recap`) and read-only CWL visibility commands (`/cwl`, `/cwl-war`, `/cwl-missed`). The bot can post automatic regular-war recaps from completed snapshots. CWL reminders are not automated yet.
 
 ## Discord Bot Conversion
 
