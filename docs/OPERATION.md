@@ -16,6 +16,16 @@ Optionally override the clan tag:
 export COC_CLAN_TAG="#22YY2LPV2"
 ```
 
+On the Droplet, `.env` may use `CLASH_API_TOKEN` and `CLAN_TAG`. For manual shell work:
+
+```bash
+set -a
+source .env
+set +a
+export COC_API_TOKEN="$CLASH_API_TOKEN"
+export COC_CLAN_TAG="$CLAN_TAG"
+```
+
 Run a manual fetch:
 
 ```bash
@@ -143,7 +153,27 @@ site_output/current-war.html
 site_output/history.html
 ```
 
-The weekly report page uses the selected report window from saved snapshots and includes a full roster table for that window. The history page uses all saved final snapshots in `data/war_results/` and includes all-time roster accountability. The current-war page requires `COC_API_TOKEN` for the live API call; if the token is missing or the API call fails, the page is still generated with an unavailable-data message.
+The weekly report page uses the selected report window from saved snapshots and includes a full roster table for that window. The history page uses all saved final snapshots in `data/war_results/` and includes all-time roster accountability.
+
+The current-war page is generated from `data/current_war/latest_current_war.json` by default. Refresh it first:
+
+```bash
+python3 fetch_current_war_snapshot.py
+```
+
+Then build:
+
+```bash
+python3 build_site.py --include-current-war
+```
+
+To let the build call the live API if the snapshot is missing:
+
+```bash
+python3 build_site.py --include-current-war --live-current-war-fallback
+```
+
+If current-war data is unavailable, the page is still generated with an unavailable-data message.
 
 Commit and push the generated page:
 
@@ -203,6 +233,8 @@ kill <PID>
 
 The auto deploy loop should run on the PC where `COC_API_TOKEN` is permanently available. It rebuilds with current-war data, stages only `site_output/`, uses normal `git push`, and keeps retrying after failed builds or pushes.
 
+On the production Droplet, the active automation is `coc-report-updater.timer`, which runs `update_coc_report.sh` every 15 minutes. The updater should build with `--include-current-war --live-current-war-fallback` so the current-war page can use the Droplet's allowlisted IP when the local current-war snapshot is missing. The duplicate `coc-report-deploy.timer` was disabled and should stay disabled unless replacing the updater path intentionally.
+
 ## Troubleshooting
 
 Missing token:
@@ -211,7 +243,7 @@ Missing token:
 Missing COC_API_TOKEN environment variable.
 ```
 
-Set `COC_API_TOKEN` before running `fetch_war.py`, `schedule_war_snapshot.py`, or `war_warning_message.py`.
+Set `COC_API_TOKEN`, or load `.env` and bridge `CLASH_API_TOKEN` to `COC_API_TOKEN`, before running live API scripts manually.
 
 No weekly report data:
 
@@ -235,4 +267,4 @@ Run `python3 build_site.py` again and confirm `site_output/history.html` exists.
 
 Current war page unavailable:
 
-Run `python3 build_site.py --include-current-war` with `COC_API_TOKEN` set. If `site_output/current-war.html` still says current war data is unavailable, verify the token, IP allowlist, clan tag, and Clash API availability.
+Run `python3 fetch_current_war_snapshot.py`, then `python3 build_site.py --include-current-war`. If `site_output/current-war.html` still says current war data is unavailable, verify the token, IP allowlist, clan tag, and Clash API availability.

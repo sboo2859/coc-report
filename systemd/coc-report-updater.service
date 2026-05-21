@@ -1,0 +1,9 @@
+[Unit]
+Description=CoC Report Static Site Updater
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/clashcommand/app
+EnvironmentFile=/opt/clashcommand/app/.env
+ExecStart=/opt/clashcommand/app/update_coc_report.sh

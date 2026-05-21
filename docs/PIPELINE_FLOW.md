@@ -10,10 +10,11 @@ python3 fetch_war.py
 
 The script:
 
-1. Reads `COC_API_TOKEN` and `COC_CLAN_TAG`.
+1. Reads `COC_API_TOKEN`/`COC_CLAN_TAG`, falling back to `CLASH_API_TOKEN`/`CLAN_TAG`.
 2. Calls the Clash `currentwar` endpoint.
 3. Prints each clan member's attack participation.
 4. Saves the raw response to `data/wars/war_YYYY-MM-DD_HH-MM.json`.
+5. Saves the latest current-war snapshot to `data/current_war/latest_current_war.json`.
 
 Manual snapshots are useful for inspection, but they are only final if the command is run after war results have settled.
 
@@ -157,9 +158,17 @@ python3 build_site.py --include-current-war
 
 The command always builds the weekly report. It then attempts one live API call for the current war.
 
-If the API call succeeds:
+By default, the command reads `data/current_war/latest_current_war.json`. Refresh that snapshot first with:
 
-1. Fetch the live `currentwar` response through `fetch_current_war()`.
+```bash
+python3 fetch_current_war_snapshot.py
+```
+
+If `--live-current-war-fallback` is passed and the snapshot is missing or unreadable, `build_site.py` calls the live Clash API.
+
+If current-war data is available:
+
+1. Load the latest current-war snapshot, or fetch live data when fallback is enabled.
 2. Calculate used attacks, possible attacks, unused attacks, and members with remaining attacks.
 3. Parse start and end times and display them in Central Time.
 4. Calculate time remaining when `state == "inWar"`.
@@ -170,8 +179,25 @@ If the API token is missing or the API call fails, the command still writes `sit
 This flow is:
 
 ```text
-Clash API -> build_site.py --include-current-war -> current-war.html -> GitHub -> Cloudflare Pages
+Clash API -> fetch_current_war_snapshot.py -> data/current_war/latest_current_war.json
+data/current_war/latest_current_war.json -> build_site.py --include-current-war -> current-war.html -> GitHub -> Cloudflare Pages
 ```
+
+## Droplet Report Updater Flow
+
+The production Droplet uses `coc-report-updater.timer` every 15 minutes:
+
+```text
+coc-report-updater.timer
+  -> coc-report-updater.service
+  -> update_coc_report.sh
+  -> build_site.py --include-current-war --live-current-war-fallback
+  -> git add site_output
+  -> git commit + push if changed
+  -> Cloudflare Pages
+```
+
+Only one report updater timer should be enabled. `coc-report-deploy.timer` was disabled as duplicate automation.
 
 ## Local Deploy Flow
 

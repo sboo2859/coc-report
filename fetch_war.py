@@ -7,14 +7,23 @@ from urllib.parse import quote
 
 DEFAULT_CLAN_TAG = "#22YY2LPV2"
 DEFAULT_WAR_DIR = "data/wars"
+DEFAULT_CURRENT_WAR_FILE = "data/current_war/latest_current_war.json"
 
 
 def get_api_token():
-    return os.environ.get("COC_API_TOKEN", "").strip()
+    return (
+        os.environ.get("COC_API_TOKEN")
+        or os.environ.get("CLASH_API_TOKEN")
+        or ""
+    ).strip()
 
 
 def get_clan_tag():
-    return os.environ.get("COC_CLAN_TAG", DEFAULT_CLAN_TAG).strip()
+    return (
+        os.environ.get("COC_CLAN_TAG")
+        or os.environ.get("CLAN_TAG")
+        or DEFAULT_CLAN_TAG
+    ).strip()
 
 
 def fetch_current_war(api_token=None, clan_tag=None, timeout=20):
@@ -23,7 +32,8 @@ def fetch_current_war(api_token=None, clan_tag=None, timeout=20):
 
     if not api_token:
         raise RuntimeError(
-            'Missing COC_API_TOKEN environment variable. Example: export COC_API_TOKEN="your Clash API token"'
+            'Missing COC_API_TOKEN or CLASH_API_TOKEN environment variable. '
+            'Example: export COC_API_TOKEN="your Clash API token"'
         )
 
     import requests
@@ -69,6 +79,27 @@ def save_war_snapshot(data, output_dir=DEFAULT_WAR_DIR, prefix="war"):
     return filename
 
 
+def save_latest_current_war(data, output_path=DEFAULT_CURRENT_WAR_FILE):
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    tmp_file = f"{output_path}.tmp"
+    with open(tmp_file, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp_file, output_path)
+
+    return output_path
+
+
+def load_latest_current_war(input_path=DEFAULT_CURRENT_WAR_FILE):
+    if not os.path.exists(input_path):
+        return None
+
+    with open(input_path) as f:
+        return json.load(f)
+
+
 def main():
     try:
         data, status_code = fetch_current_war()
@@ -81,6 +112,9 @@ def main():
 
     filename = save_war_snapshot(data)
     print(f"\nSaved war snapshot to {filename}")
+
+    latest_filename = save_latest_current_war(data)
+    print(f"Saved latest current war snapshot to {latest_filename}")
 
 
 if __name__ == "__main__":

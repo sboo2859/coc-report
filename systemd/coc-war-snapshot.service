@@ -1,0 +1,15 @@
+[Unit]
+Description=CoC Final War Snapshot Watcher
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/opt/clashcommand/app
+EnvironmentFile=/opt/clashcommand/app/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/clashcommand/.venv/bin/python schedule_war_snapshot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

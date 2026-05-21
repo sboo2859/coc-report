@@ -12,12 +12,12 @@ The first production target can still be one clan on one DigitalOcean droplet, b
 
 Top-level scripts:
 
-- `fetch_war.py`: shared Clash API fetch helper plus a manual fetch command. Reads `COC_API_TOKEN` and `COC_CLAN_TAG`, calls `/clans/{tag}/currentwar`, prints participation, and saves raw snapshots under `data/wars/`.
+- `fetch_war.py`: shared Clash API fetch helper plus a manual fetch command. Reads `COC_API_TOKEN`/`COC_CLAN_TAG` with `CLASH_API_TOKEN`/`CLAN_TAG` fallbacks, calls `/clans/{tag}/currentwar`, prints participation, saves raw snapshots under `data/wars/`, and updates `data/current_war/latest_current_war.json`.
 - `schedule_war_snapshot.py`: long-running scheduler. Polls current war state, waits until `endTime + WAR_END_BUFFER_MINUTES`, saves final snapshots to `data/war_results/`, and dedupes with `data/state/saved_wars.json`.
 - `war_warning_message.py`: live copy/paste reminder generator. Fetches current war and lists members with remaining attacks.
 - `war_poll_interval.py`: computes a polling interval based on war state and time remaining.
 - `weekly_report.py`: report and rendering module. Loads saved final snapshots, dedupes wars, aggregates weekly and all-time metrics, builds roster accountability data, generates text reports, and renders static HTML pages.
-- `build_site.py`: static site entrypoint. Builds weekly and history pages, and optionally a current-war page from the live API.
+- `build_site.py`: static site entrypoint. Builds weekly and history pages, and optionally a current-war page from `data/current_war/latest_current_war.json`, with live API fallback only when requested.
 - `deploy.sh`: local build, commit, and push flow for `site_output/`.
 - `auto_deploy_loop.sh`: local long-running loop that rebuilds and pushes static output using `war_poll_interval.py`.
 - `Procfile`: currently points a worker at `python fetch_war.py`, which is not enough for the future bot or scheduler.
@@ -33,6 +33,7 @@ Documentation already present:
 Generated and runtime paths:
 
 - `data/wars/`: manual raw snapshots.
+- `data/current_war/`: latest current-war snapshot for static current-war rendering.
 - `data/war_results/`: final snapshots used by reports.
 - `data/state/saved_wars.json`: file-based dedupe state.
 - `site_output/`: committed static Cloudflare Pages output.
@@ -65,6 +66,8 @@ Current-war static page flow:
 
 ```text
 Clash API
+  -> fetch_current_war_snapshot.py
+  -> data/current_war/latest_current_war.json
   -> build_site.py --include-current-war
   -> site_output/current-war.html
 ```
@@ -92,10 +95,11 @@ Single clan:
 - Bot design should store clan tags per Discord guild in a `guilds` table.
 - Future multi-clan support can be added with a `guild_clans` table, but MVP can use one clan per guild.
 
-Local PC and static deployment:
+Static deployment:
 
-- `deploy.sh` and `auto_deploy_loop.sh` assume a local machine with Git credentials and a token in the environment.
-- The Discord bot should run as a long-lived service on the droplet. It should not commit generated files as part of normal operation.
+- `deploy.sh` and `auto_deploy_loop.sh` assume a machine with Git credentials and a token in the environment.
+- Production currently uses a Droplet timer (`coc-report-updater.timer`) to run `update_coc_report.sh` every 15 minutes.
+- The Discord bot should run as a long-lived service on the droplet. It should not commit generated files as part of bot command handling.
 
 Manual run:
 
@@ -114,7 +118,7 @@ Time zone:
 
 Token handling:
 
-- Current API token comes from `COC_API_TOKEN`, which is good.
+- Current API token can come from `COC_API_TOKEN` or `CLASH_API_TOKEN`.
 - Discord token must also come from environment only.
 - Never commit `.env`, tokens, generated secrets, or droplet-local config.
 
@@ -598,4 +602,3 @@ These are good first code changes after the audit:
 - Add one canonical `parse_coc_time()`.
 - Extract remaining-attack calculations into a pure function module.
 - Add tests for war summaries using fixture JSON.
-

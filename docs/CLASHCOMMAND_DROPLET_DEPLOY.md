@@ -92,7 +92,15 @@ Notes:
 - Global command updates can take up to about an hour to appear in every server.
 - `CLAN_TAG` should stay quoted because Clash tags begin with `#`.
 
-The old static scripts still use `COC_API_TOKEN` and `COC_CLAN_TAG`. You can set those too if you want to run static scripts on the droplet, but the Discord bot uses `CLASH_API_TOKEN` and `CLAN_TAG`.
+Some static/operator commands may still refer to `COC_API_TOKEN` and `COC_CLAN_TAG`. Current `fetch_war.py` supports those names and the bot-oriented `CLASH_API_TOKEN`/`CLAN_TAG` names. For manual shell recovery, it is still safe to bridge them:
+
+```bash
+set -a
+source .env
+set +a
+export COC_API_TOKEN="$CLASH_API_TOKEN"
+export COC_CLAN_TAG="$CLAN_TAG"
+```
 
 ## 5. Install Python Dependencies
 

@@ -1,5 +1,6 @@
 [Unit]
-Description=CoC Report Static Site Deploy
+Description=DEPRECATED duplicate CoC Report Static Site Deploy
+Documentation=file:/opt/clashcommand/app/systemd/README.md
 After=network.target
 
 [Service]

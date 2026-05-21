@@ -1,5 +1,6 @@
 [Unit]
-Description=Run CoC Report Static Site Deploy Every 30 Minutes
+Description=DEPRECATED duplicate CoC Report Static Site Deploy Timer
+Documentation=file:/opt/clashcommand/app/systemd/README.md
 
 [Timer]
 OnBootSec=5min

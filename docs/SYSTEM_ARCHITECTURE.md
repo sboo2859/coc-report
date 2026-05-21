@@ -11,9 +11,33 @@ The system has two jobs:
 
 It is intentionally script-based and file-based. That keeps the project easy to run locally, easy to move to a VPS later, and simple to extend without adding infrastructure too early.
 
+## Production Droplet
+
+The current DigitalOcean Droplet architecture is:
+
+```text
+clashcommand.service
+  -> Discord bot
+
+coc-war-snapshot.service
+  -> schedule_war_snapshot.py
+  -> data/war_results/final_war_*.json
+
+coc-report-updater.timer
+  -> coc-report-updater.service every 15 minutes
+  -> update_coc_report.sh
+  -> site_output/
+  -> git push
+
+Cloudflare Pages
+  -> committed site_output/
+```
+
+The duplicate `coc-report-deploy.timer` path was disabled on the Droplet. Keep only one report updater timer enabled.
+
 ## Core Components
 
-`fetch_war.py` is the shared API layer and manual fetch command. It loads `COC_API_TOKEN`, fetches `currentwar`, prints attack participation, and saves manual snapshots to `data/wars/`.
+`fetch_war.py` is the shared API layer and manual fetch command. It supports `COC_API_TOKEN`/`COC_CLAN_TAG` and `CLASH_API_TOKEN`/`CLAN_TAG`, fetches `currentwar`, prints attack participation, saves manual snapshots to `data/wars/`, and writes the latest current-war snapshot to `data/current_war/latest_current_war.json`.
 
 `schedule_war_snapshot.py` is the long-running scheduler. It reuses `fetch_war.py`, watches the current war state, waits until `endTime` plus a buffer, and saves final snapshots to `data/war_results/`.
 
@@ -21,7 +45,9 @@ It is intentionally script-based and file-based. That keeps the project easy to 
 
 `weekly_report.py` reads saved final snapshots from `data/war_results/` and builds weekly and all-time historical reports. These reports include full roster tables with member attacks, stars, and average attack destruction. It does not call the Clash API for saved-snapshot reporting.
 
-`build_site.py` generates static HTML under `site_output/` for Cloudflare Pages. By default it writes the weekly report and total history pages. With `--include-current-war`, it also fetches the live current war and writes a static current-war dashboard.
+`fetch_current_war_snapshot.py` refreshes `data/current_war/latest_current_war.json` from the Clash API for current-war site generation.
+
+`build_site.py` generates static HTML under `site_output/` for Cloudflare Pages. By default it writes the weekly report and total history pages. With `--include-current-war`, it writes a static current-war dashboard from `data/current_war/latest_current_war.json`. With `--live-current-war-fallback`, it can call the live API if that snapshot is unavailable.
 
 `deploy.sh` is the one-time local deploy command. It rebuilds the full static site with current-war data, stages only `site_output/`, commits if generated output changed, and pushes normally to GitHub.
 
@@ -36,6 +62,8 @@ Clash API
 fetch_war.py
    |
    +--> data/wars/                  manual snapshots
+   |
+   +--> data/current_war/            latest current-war snapshot
    |
    v
 schedule_war_snapshot.py
@@ -73,7 +101,7 @@ Clash API
    v
 war_warning_message.py             live copy/paste reminder
 
-Clash API
+data/current_war/latest_current_war.json
    |
    v
 build_site.py --include-current-war
@@ -111,9 +139,9 @@ The static site generator wraps the same weekly report logic in self-contained H
 
 The history page uses the same saved final snapshots but includes all deduped wars instead of the weekly report window. It derives all-time war totals, member accountability metrics, and full roster performance, then writes `site_output/history.html`.
 
-When `build_site.py --include-current-war` is used, `build_site.py` calls `fetch_current_war()` once at build time. If the API call succeeds, `site_output/current-war.html` contains the current state, timing, attack usage, remaining attacks, and a copy/paste warning message. If the token is missing or the API fails, the page is still generated with an unavailable-data message.
+When `build_site.py --include-current-war` is used, `build_site.py` first loads `data/current_war/latest_current_war.json`. If `--live-current-war-fallback` is passed and the snapshot is unavailable, it calls `fetch_current_war()` once at build time. If current-war data is available, `site_output/current-war.html` contains the current state, timing, attack usage, remaining attacks, and a copy/paste warning message. If current-war data is unavailable, the page is still generated with an unavailable-data message.
 
-The auto deploy loop is intended to run on the PC where `COC_API_TOKEN` is available. It never force-pushes and only stages `site_output/`, so runtime data directories remain outside deploy commits.
+The production Droplet updater is `coc-report-updater.timer`, which runs `update_coc_report.sh` every 15 minutes. That script must call `build_site.py --include-current-war --live-current-war-fallback` so the current-war page can use the Droplet's allowlisted IP when `data/current_war/latest_current_war.json` is missing. Local deploy scripts are still available for manual operation. Deploy automation should only stage `site_output/`, so runtime data directories remain outside deploy commits.
 
 Displayed site timestamps are formatted in Central Time using `ZoneInfo("America/Chicago")` when available, with a UTC fallback if Python cannot load zoneinfo.
 

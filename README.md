@@ -2,6 +2,17 @@
 
 Utilities for fetching Clash of Clans current war snapshots.
 
+Production currently runs on the DigitalOcean Droplet `ClashCommand`:
+
+```text
+clashcommand.service       -> Discord bot
+coc-war-snapshot.service  -> final war snapshots in data/war_results/
+coc-report-updater.timer  -> rebuild/push site_output/ every 15 minutes
+Cloudflare Pages          -> serves committed static files
+```
+
+For recovery and operator commands, start with [CoC Report Runbook](docs/RUNBOOK.md).
+
 ## Discord Bot Conversion
 
 This project is being planned for conversion into **ClashCommand**, a Discord bot for war accountability and smart reminders. The existing script and static report flow should remain usable while reusable Clash API, war timing, missed-attack, and reporting logic is extracted into a bot-ready package.
@@ -18,6 +29,7 @@ Planning docs:
 - [Pipeline Flow](docs/PIPELINE_FLOW.md)
 - [Data Contracts](docs/DATA_CONTRACTS.md)
 - [Operation Guide](docs/OPERATION.md)
+- [Runbook](docs/RUNBOOK.md)
 - [Architecture Decisions](docs/DECISIONS.md)
 
 ## Configuration
@@ -32,6 +44,23 @@ The default clan tag is configured in `fetch_war.py`. You can override it withou
 
 ```bash
 export COC_CLAN_TAG="#22YY2LPV2"
+```
+
+The Droplet `.env` may instead use the Discord-bot names:
+
+```bash
+export CLASH_API_TOKEN="your Clash API token"
+export CLAN_TAG="#22YY2LPV2"
+```
+
+`fetch_war.py` supports both name pairs. In an interactive Droplet shell, this bridge is safe:
+
+```bash
+set -a
+source .env
+set +a
+export COC_API_TOKEN="$CLASH_API_TOKEN"
+export COC_CLAN_TAG="$CLAN_TAG"
 ```
 
 ## Manual One-Time Fetch
@@ -148,7 +177,7 @@ site_output/index.html
 site_output/history.html
 ```
 
-Optionally include a static current-war page from the live Clash API:
+Optionally include a static current-war page:
 
 ```bash
 python3 build_site.py --include-current-war
@@ -162,7 +191,21 @@ site_output/current-war.html
 site_output/history.html
 ```
 
-The weekly report uses the selected report window from saved final snapshots in `data/war_results/` and does not require API access. Total History uses all saved final snapshots in `data/war_results/`. The current-war page requires `COC_API_TOKEN` at build time. If the token is missing or the API call fails, the build still writes `current-war.html` with an unavailable-data message.
+The weekly report uses the selected report window from saved final snapshots in `data/war_results/` and does not require API access. Total History uses all saved final snapshots in `data/war_results/`.
+
+In this checkout, `build_site.py --include-current-war` prefers `data/current_war/latest_current_war.json`. Refresh that file first with:
+
+```bash
+python3 fetch_current_war_snapshot.py
+```
+
+Or allow `build_site.py` to call the live API if the snapshot is missing:
+
+```bash
+python3 build_site.py --include-current-war --live-current-war-fallback
+```
+
+If current-war data is unavailable, the build still writes `current-war.html` with an unavailable-data message.
 
 You can also generate only the weekly page directly from the report script:
 
@@ -186,7 +229,7 @@ git add site_output/current-war.html
 
 The site is static. Cloudflare Pages serves the committed files and only updates after you rebuild locally, commit the generated HTML, and push.
 
-### Local deploy
+### Deploy commands
 
 Run a one-time build, commit, and push of `site_output/`:
 
@@ -220,6 +263,8 @@ kill <PID>
 ```
 
 The auto deploy loop should run on the PC where `COC_API_TOKEN` is permanently available. It rebuilds the static site, commits only `site_output/` when generated output changes, and lets Cloudflare Pages redeploy from the GitHub push.
+
+On the production Droplet, the active updater is `coc-report-updater.timer`, which runs `update_coc_report.sh` every 15 minutes. It should build with `--include-current-war --live-current-war-fallback` so the current-war page can use the Droplet's allowlisted IP when the local snapshot is missing. The older local loop is still useful for manual/local operation but is not the current production service.
 
 ### Cloudflare Pages setup
 

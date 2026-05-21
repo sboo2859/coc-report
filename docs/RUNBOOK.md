@@ -2,23 +2,34 @@
 
 ## What This Project Does
 
-- The Discord bot runs on the DigitalOcean Droplet.
+- The Discord bot runs on the DigitalOcean Droplet as `clashcommand.service`.
 - The Droplet has Clash API access because its IP is allowlisted.
-- The static website is generated into `site_output/`.
-- Cloudflare serves the committed static output.
+- The final war watcher saves completed war snapshots into `data/war_results/`.
+- The website updater rebuilds `site_output/` and pushes generated HTML to GitHub.
+- Cloudflare Pages serves the committed static output from GitHub.
 
-## System Overview
-
-Current working chain:
+## Current Production Architecture
 
 ```text
-DigitalOcean Droplet
-  -> fetch_war.py / Clash API
-  -> build_site.py --include-current-war
-  -> site_output/
-  -> git commit + push
-  -> Cloudflare Pages deploy
+clashcommand.service
+  -> Discord bot
+
+coc-war-snapshot.service
+  -> runs schedule_war_snapshot.py continuously
+  -> watches active wars through the Clash API
+  -> saves completed final_war_*.json to data/war_results/
+
+coc-report-updater.timer
+  -> runs coc-report-updater.service every 15 minutes
+  -> executes update_coc_report.sh
+  -> rebuilds site_output/
+  -> commits/pushes site_output if changed
+
+Cloudflare Pages
+  -> serves committed static files from GitHub
 ```
+
+The duplicate `coc-report-deploy.timer` automation was disabled on the Droplet. Do not run both updater timers at the same time.
 
 ## DigitalOcean Access
 
@@ -31,9 +42,266 @@ DigitalOcean Droplet
 cd /opt/clashcommand/app
 ```
 
+## Quick Health Check
+
+```bash
+cd /opt/clashcommand/app
+
+systemctl status clashcommand
+systemctl status coc-war-snapshot
+systemctl status coc-report-updater
+systemctl list-timers | grep coc
+
+journalctl -u clashcommand -n 100 --no-pager
+journalctl -u coc-war-snapshot -n 100 --no-pager
+journalctl -u coc-report-updater -n 100 --no-pager
+
+ls -l data/war_results
+find data -maxdepth 3 -type f | sort | tail -50
+
+python3 build_site.py --include-current-war
+git status --short
+```
+
+Expected:
+
+- `clashcommand.service` is active for the Discord bot.
+- `coc-war-snapshot.service` is active or sleeping until the next war check/final snapshot.
+- `coc-report-updater.timer` is enabled and scheduled.
+- `coc-report-deploy.timer` should not be enabled if `coc-report-updater.timer` is active.
+- `data/war_results/` should gain `final_war_*.json` files after wars end.
+
+## Environment Variables
+
+The Droplet `.env` contains the real tokens. Do not commit it, paste it into chat, or copy token values into docs.
+
+Interactive shells do not automatically load `.env`. Before manual API work, run:
+
+```bash
+set -a
+source .env
+set +a
+export COC_API_TOKEN="$CLASH_API_TOKEN"
+export COC_CLAN_TAG="$CLAN_TAG"
+```
+
+Why the bridge matters:
+
+- The Discord bot uses `CLASH_API_TOKEN` and `CLAN_TAG`.
+- Older scripts may look for `COC_API_TOKEN` and `COC_CLAN_TAG`.
+- `fetch_war.py` in this repo supports both name pairs, but the bridge is still safe for manual recovery.
+
+## Data Flow
+
+Current war snapshots:
+
+```text
+Clash API
+  -> fetch_war.py / fetch_current_war_snapshot.py
+  -> data/current_war/latest_current_war.json
+  -> build_site.py --include-current-war
+  -> site_output/current-war.html
+```
+
+Final war snapshots:
+
+```text
+Clash API
+  -> schedule_war_snapshot.py
+  -> data/war_results/final_war_*.json
+  -> weekly_report.py / build_site.py
+  -> site_output/index.html and site_output/history.html
+```
+
+Deployment:
+
+```text
+update_coc_report.sh
+  -> python3 build_site.py --include-current-war --live-current-war-fallback
+  -> git add site_output
+  -> git commit + push if changed
+  -> Cloudflare Pages deploy
+```
+
+## How Reports Populate
+
+Weekly and overall reports read completed final snapshots from:
+
+```text
+data/war_results/final_war_*.json
+```
+
+They do not read `data/wars/`. A file in `data/wars/` is usually a current/manual snapshot. Copying a `data/wars/*.json` file into `data/war_results/final_war_*.json` proved the report pages populate when final snapshots exist, but that is only a diagnostic trick. The normal source should be `coc-war-snapshot.service`.
+
+Verify final snapshots:
+
+```bash
+ls -l data/war_results
+find data/war_results -maxdepth 1 -type f -name 'final_war_*.json' | sort | tail
+```
+
+If `data/war_results/` is empty, weekly and overall pages can still build, but they will show no historical report data.
+
+## How Current War Updates
+
+The Droplet is the trusted Clash API fetch environment. Mac or Cloudflare fetches may fail with:
+
+```text
+403 accessDenied.invalidIp
+```
+
+In this repo, `build_site.py --include-current-war` prefers:
+
+```text
+data/current_war/latest_current_war.json
+```
+
+Use this command to refresh that snapshot from the Clash API:
+
+```bash
+python3 fetch_current_war_snapshot.py
+```
+
+Then rebuild:
+
+```bash
+python3 build_site.py --include-current-war --live-current-war-fallback
+```
+
+`update_coc_report.sh` must use `--live-current-war-fallback` on the Droplet. That lets the updater use `data/current_war/latest_current_war.json` when present, or fetch the live current war from the Clash API when the snapshot is missing. The Droplet IP is allowlisted, so this fallback is expected to work there.
+
+```bash
+sed -n '1,120p' update_coc_report.sh
+```
+
+## Manual Rebuild And Push
+
+Use this when the updater timer is broken or you need to publish immediately:
+
+```bash
+cd /opt/clashcommand/app
+set -a
+source .env
+set +a
+export COC_API_TOKEN="$CLASH_API_TOKEN"
+export COC_CLAN_TAG="$CLAN_TAG"
+
+python3 fetch_current_war_snapshot.py
+python3 build_site.py --include-current-war --live-current-war-fallback
+git status --short
+git add site_output
+git commit -m "Update clan report site"
+git push
+```
+
+Only stage `site_output/` for normal site deploys. Do not stage `.env`, `data/`, or unrelated files.
+
+If there are no generated changes, `git commit` will report nothing to commit. That is safe.
+
+## Services And Timers
+
+### Discord Bot
+
+```bash
+systemctl status clashcommand
+systemctl restart clashcommand
+journalctl -u clashcommand -n 100 --no-pager
+```
+
+Service file:
+
+```text
+/etc/systemd/system/clashcommand.service
+```
+
+Working directory:
+
+```text
+/opt/clashcommand/app
+```
+
+### Final War Snapshot Watcher
+
+```bash
+systemctl status coc-war-snapshot
+systemctl restart coc-war-snapshot
+journalctl -u coc-war-snapshot -n 100 --no-pager
+```
+
+Role:
+
+- Runs `schedule_war_snapshot.py` continuously.
+- Watches the active war.
+- Sleeps until war end plus buffer.
+- Saves completed `final_war_*.json` files to `data/war_results/`.
+
+The repo includes a service template:
+
+```text
+systemd/coc-war-snapshot.service
+```
+
+Install example:
+
+```bash
+sudo cp systemd/coc-war-snapshot.service /etc/systemd/system/coc-war-snapshot.service
+sudo systemctl daemon-reload
+sudo systemctl enable coc-war-snapshot
+sudo systemctl start coc-war-snapshot
+sudo systemctl status coc-war-snapshot
+```
+
+### Report Updater Timer
+
+```bash
+systemctl status coc-report-updater
+systemctl list-timers | grep coc
+journalctl -u coc-report-updater -n 100 --no-pager
+sudo systemctl start coc-report-updater.service
+```
+
+Role:
+
+- `coc-report-updater.timer` runs every 15 minutes.
+- `coc-report-updater.service` executes `update_coc_report.sh`.
+- The script rebuilds `site_output/` with `--live-current-war-fallback`.
+- It stages `site_output/`, commits, and pushes only when generated output changed.
+
+Expected script behavior:
+
+```text
+update_coc_report.sh
+  -> python3 build_site.py --include-current-war --live-current-war-fallback
+  -> git add site_output
+  -> commit/push if changed
+```
+
+Install examples should match the live Droplet unit names:
+
+```bash
+sudo cp systemd/coc-report-updater.service /etc/systemd/system/coc-report-updater.service
+sudo cp systemd/coc-report-updater.timer /etc/systemd/system/coc-report-updater.timer
+sudo systemctl daemon-reload
+sudo systemctl enable coc-report-updater.timer
+sudo systemctl start coc-report-updater.timer
+sudo systemctl start coc-report-updater.service
+journalctl -u coc-report-updater -n 100 --no-pager
+systemctl list-timers | grep coc
+```
+
+Avoid duplicate timers:
+
+```bash
+systemctl list-timers | grep coc
+systemctl is-enabled coc-report-deploy.timer
+sudo systemctl disable --now coc-report-deploy.timer
+```
+
+Use `coc-report-updater.timer` as the active production updater unless you intentionally replace it.
+
 ## Common Commands
 
-### Check Repo
+Check repo:
 
 ```bash
 cd /opt/clashcommand/app
@@ -41,35 +309,18 @@ git status
 git pull
 ```
 
-### Load Environment Variables
-
-`.env` contains the real token variables. Do not commit it, paste it into chat, or copy token values into docs.
+Fetch current war manually:
 
 ```bash
 set -a
 source .env
 set +a
-```
-
-### Fetch Current War
-
-The current Droplet `.env` uses `CLASH_API_TOKEN` and `CLAN_TAG`, while older scripts may expect `COC_API_TOKEN` and `COC_CLAN_TAG`.
-
-Bridge the names before running older scripts:
-
-```bash
 export COC_API_TOKEN="$CLASH_API_TOKEN"
 export COC_CLAN_TAG="$CLAN_TAG"
 python3 fetch_war.py
 ```
 
-### Rebuild Website
-
-```bash
-python3 build_site.py --include-current-war
-```
-
-### Verify Current War Page
+Verify current war page:
 
 ```bash
 grep -n "Current war data unavailable" site_output/current-war.html
@@ -78,142 +329,6 @@ grep -n "vs" site_output/current-war.html | head
 
 - If the unavailable text appears, current war did not render.
 - If matchup text like `Clan vs Opponent` appears, current war rendered.
-
-### Push Site Update
-
-```bash
-git status --short
-git add site_output
-git commit -m "Update current war page"
-git push
-```
-
-## Bot Service
-
-```bash
-systemctl status clashcommand
-systemctl restart clashcommand
-journalctl -u clashcommand -n 100 --no-pager
-```
-
-The service file currently lives at:
-
-```text
-/etc/systemd/system/clashcommand.service
-```
-
-The service working directory is:
-
-```text
-/opt/clashcommand/app
-```
-
-## Final War Snapshot Service
-
-Weekly and overall reports read completed war snapshots from:
-
-```text
-data/war_results/final_war_*.json
-```
-
-The watcher is `schedule_war_snapshot.py`. It runs continuously, polls the Clash current-war API, and saves completed wars into `data/war_results/`.
-
-The repo includes a systemd unit template at:
-
-```text
-systemd/coc-war-snapshot.service
-```
-
-On the Droplet, install or edit the service file:
-
-```bash
-sudo nano /etc/systemd/system/coc-war-snapshot.service
-```
-
-Use this service content:
-
-```ini
-[Unit]
-Description=CoC Final War Snapshot Watcher
-After=network.target
-
-[Service]
-User=root
-WorkingDirectory=/opt/clashcommand/app
-EnvironmentFile=/opt/clashcommand/app/.env
-Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/clashcommand/.venv/bin/python schedule_war_snapshot.py
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable and start it:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable coc-war-snapshot
-sudo systemctl start coc-war-snapshot
-sudo systemctl status coc-war-snapshot
-journalctl -u coc-war-snapshot -n 100 --no-pager
-```
-
-Check that completed wars are being saved:
-
-```bash
-ls -lh data/war_results/
-```
-
-## Report Deploy Timer
-
-Weekly and overall report pages update only after `site_output/` is rebuilt, committed, and pushed. The deploy timer runs a safe one-shot script every 30 minutes.
-
-The script is:
-
-```text
-scripts/deploy_report_once.sh
-```
-
-It rebuilds the site, stages only `site_output/`, exits cleanly when nothing changed, commits generated site output with `Update clan report site`, and pushes to origin.
-
-The repo includes systemd templates at:
-
-```text
-systemd/coc-report-deploy.service
-systemd/coc-report-deploy.timer
-```
-
-Install and start on the Droplet:
-
-```bash
-sudo cp systemd/coc-report-deploy.service /etc/systemd/system/coc-report-deploy.service
-sudo cp systemd/coc-report-deploy.timer /etc/systemd/system/coc-report-deploy.timer
-sudo systemctl daemon-reload
-sudo systemctl enable coc-report-deploy.timer
-sudo systemctl start coc-report-deploy.timer
-sudo systemctl start coc-report-deploy.service
-journalctl -u coc-report-deploy -n 100 --no-pager
-systemctl list-timers | grep coc
-```
-
-Check the latest pushed site update:
-
-```bash
-git log --oneline -5 -- site_output
-```
-
-## Known Gotchas
-
-- `fetch_current_war_snapshot.py` may exist on local Mac but not on Droplet if changes were not pushed.
-- Droplet interactive shell does not automatically load `.env`.
-- Clash API may fail from Mac or Cloudflare with `403 accessDenied.invalidIp`; Droplet is the trusted fetch environment.
-- `data/wars/` may be ignored; the important deployed artifact is usually `site_output/current-war.html`.
-- Weekly and overall report pages need completed snapshots in `data/war_results/`; current war snapshots in `data/wars/` do not populate those reports.
-- The deploy timer should only commit `site_output/`; do not use it to publish `.env`, `data/`, or unrelated local changes.
-- Do not paste `.env` or API tokens into chat.
-- `update_coc_report.sh` is currently untracked; review before committing.
 
 ## Troubleshooting
 
@@ -248,15 +363,42 @@ Meaning:
 - The request is coming from a machine not allowlisted in Clash API.
 - Run fetches on the DigitalOcean Droplet.
 
+### Weekly Or Overall Reports Are Empty
+
+Check final snapshots and watcher logs:
+
+```bash
+ls -l data/war_results
+find data/war_results -maxdepth 1 -type f -name 'final_war_*.json' | sort | tail
+systemctl status coc-war-snapshot
+journalctl -u coc-war-snapshot -n 100 --no-pager
+```
+
+If snapshots exist but the site is stale, check the updater:
+
+```bash
+systemctl status coc-report-updater
+journalctl -u coc-report-updater -n 100 --no-pager
+sudo systemctl start coc-report-updater.service
+```
+
 ### Current War Page Shows Fallback
 
 Run:
 
 ```bash
-python3 fetch_war.py
-python3 build_site.py --include-current-war
+set -a
+source .env
+set +a
+export COC_API_TOKEN="$CLASH_API_TOKEN"
+export COC_CLAN_TAG="$CLAN_TAG"
+
+python3 fetch_current_war_snapshot.py
+python3 build_site.py --include-current-war --live-current-war-fallback
 grep -n "Current war data unavailable" site_output/current-war.html
 ```
+
+If fetch fails with invalid IP, confirm you are on the Droplet.
 
 ### Bot Not Responding
 
@@ -268,36 +410,36 @@ journalctl -u clashcommand -n 100 --no-pager
 systemctl restart clashcommand
 ```
 
-### Weekly Or Overall Reports Are Empty
-
-Check whether final war snapshots exist:
-
-```bash
-ls -lh data/war_results/
-systemctl status coc-war-snapshot
-journalctl -u coc-war-snapshot -n 100 --no-pager
-```
-
-If the service is missing, install and start `coc-war-snapshot.service` from the Final War Snapshot Service section.
-
 ### Site Is Not Updating
 
-Check the deploy timer and last one-shot run:
+Run:
 
 ```bash
 systemctl list-timers | grep coc
-journalctl -u coc-report-deploy -n 100 --no-pager
-sudo systemctl start coc-report-deploy.service
+journalctl -u coc-report-updater -n 100 --no-pager
+sudo systemctl start coc-report-updater.service
+git status --short
 ```
 
-If the logs say `No generated site changes to deploy.`, the rebuild matched the committed `site_output/`.
+If the updater reports no changes, the rebuilt `site_output/` matched the committed output.
+
+## Known Gotchas
+
+- `data/war_results/` was empty before final snapshot automation; weekly and overall pages need this directory populated.
+- `data/wars/` and `data/war_results/` are different. Reports use `data/war_results/`.
+- Current war data and final war report data are separate paths.
+- The Droplet interactive shell does not automatically load `.env`.
+- `CLASH_API_TOKEN`/`CLAN_TAG` and `COC_API_TOKEN`/`COC_CLAN_TAG` naming still needs cleanup.
+- `coc-report-deploy.timer` is duplicate automation and was disabled on the Droplet.
+- The repo still contains deprecated `systemd/coc-report-deploy.*` templates and `scripts/deploy_report_once.sh`; treat them as inactive unless intentionally migrating away from `coc-report-updater.timer`.
+- Do not paste `.env` or API tokens into chat.
+- Do not commit `.env`, `data/`, or unrelated runtime files.
 
 ## Next Improvements
 
 TODO:
 
-- Standardize token names to `CLASH_API_TOKEN` and `CLAN_TAG`.
-- Add a stable current-war snapshot file path if desired.
+- Standardize token names to `CLASH_API_TOKEN` and `CLAN_TAG` everywhere.
+- Remove or archive duplicate/obsolete deploy automation after confirming no one uses it.
+- Consider making the updater refresh `data/current_war/latest_current_war.json` before each build if it does not already.
 - Add clan activity/member snapshots later.
-- Decide whether `update_coc_report.sh` should be tracked.
-- Watch the deploy timer logs after the first completed war snapshot.

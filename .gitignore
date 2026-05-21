@@ -21,6 +21,7 @@ __pycache__/
 *.sqlite3
 *.db
 data/state/
+data/current_war/
 data/wars/
 data/war_results/
 data/reports/

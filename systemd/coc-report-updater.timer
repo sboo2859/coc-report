@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CoC Report Static Site Updater Every 15 Minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Unit=coc-report-updater.service
+
+[Install]
+WantedBy=timers.target
