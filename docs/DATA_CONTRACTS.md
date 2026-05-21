@@ -10,7 +10,9 @@ Default locations:
 data/wars/war_YYYY-MM-DD_HH-MM.json
 data/current_war/latest_current_war.json
 data/war_results/final_war_YYYY-MM-DD_HH-MM.json
+data/cwl_war_results/cwl_war_YYYY-MM-DD_HH-MM_WARTAG.json
 data/state/saved_wars.json
+data/state/saved_cwl_wars.json
 site_output/index.html
 site_output/current-war.html
 site_output/history.html
@@ -22,7 +24,11 @@ site_output/history.html
 
 `data/war_results/` contains final snapshots from `schedule_war_snapshot.py` and is the default input for `weekly_report.py`.
 
+`data/cwl_war_results/` contains final CWL war snapshots from `schedule_cwl_snapshot.py`. These files are not read by weekly or total history reports yet.
+
 `data/state/saved_wars.json` tracks dedupe keys so the scheduler does not save the same ended war repeatedly.
+
+`data/state/saved_cwl_wars.json` tracks CWL war tags that have already been saved.
 
 `site_output/index.html` is generated from saved final snapshots and is intended to be committed for Cloudflare Pages deployment. It is not runtime data.
 
@@ -88,6 +94,8 @@ attack.stars
 `weekly_report.py` uses `startTime`, `clan.tag`, and `opponent.tag` for dedupe and filtering. It uses clan/opponent stars, member attacks, attack stars, and optional destruction percentage for metrics.
 
 `build_site.py` uses the weekly report output and writes escaped dashboard HTML into `site_output/index.html`. It also writes all-time saved-snapshot history to `site_output/history.html`. With `--include-current-war`, it uses the latest current-war snapshot to write `site_output/current-war.html`; if current-war data is unavailable, it writes a static fallback page.
+
+`schedule_cwl_snapshot.py` uses CWL league group `state`, `season`, and `rounds[].warTags`, then saves raw CWL war responses with an added `_cwl` metadata object containing `warTag`, `season`, `round`, and `capturedAt`.
 
 ## Derived Fields
 

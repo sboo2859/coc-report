@@ -52,6 +52,57 @@ def fetch_current_war(api_token=None, clan_tag=None, timeout=20):
     return response.json(), response.status_code
 
 
+def fetch_current_league_group(api_token=None, clan_tag=None, timeout=20):
+    api_token = api_token or get_api_token()
+    clan_tag = clan_tag or get_clan_tag()
+
+    if not api_token:
+        raise RuntimeError(
+            'Missing COC_API_TOKEN or CLASH_API_TOKEN environment variable. '
+            'Example: export COC_API_TOKEN="your Clash API token"'
+        )
+
+    import requests
+
+    encoded_clan_tag = quote(clan_tag, safe="")
+    url = f"https://api.clashofclans.com/v1/clans/{encoded_clan_tag}/currentwar/leaguegroup"
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Accept": "application/json",
+    }
+
+    response = requests.get(url, headers=headers, timeout=timeout)
+    if response.status_code != 200:
+        raise RuntimeError(f"Clash API returned {response.status_code}: {response.text}")
+
+    return response.json(), response.status_code
+
+
+def fetch_cwl_war(war_tag, api_token=None, timeout=20):
+    api_token = api_token or get_api_token()
+
+    if not api_token:
+        raise RuntimeError(
+            'Missing COC_API_TOKEN or CLASH_API_TOKEN environment variable. '
+            'Example: export COC_API_TOKEN="your Clash API token"'
+        )
+
+    import requests
+
+    encoded_war_tag = quote(war_tag, safe="")
+    url = f"https://api.clashofclans.com/v1/clanwarleagues/wars/{encoded_war_tag}"
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Accept": "application/json",
+    }
+
+    response = requests.get(url, headers=headers, timeout=timeout)
+    if response.status_code != 200:
+        raise RuntimeError(f"Clash API returned {response.status_code}: {response.text}")
+
+    return response.json(), response.status_code
+
+
 def print_war_participation(data):
     print("\n=== War Participation ===")
 

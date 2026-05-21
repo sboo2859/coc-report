@@ -55,6 +55,32 @@ For `notInWar` or unknown states:
 
 If an API call fails, the scheduler logs the error, sleeps, and retries later.
 
+## CWL Snapshot Flow
+
+Run:
+
+```bash
+python3 schedule_cwl_snapshot.py
+```
+
+The CWL scheduler loops until stopped. Each loop:
+
+1. Calls `/clans/{clanTag}/currentwar/leaguegroup`.
+2. Reads `rounds[].warTags`.
+3. Skips empty placeholder war tags such as `#0`.
+4. Calls `/clanwarleagues/wars/{warTag}` for each unsaved war tag.
+5. Saves only wars where `state == "warEnded"`.
+6. Tracks saved war tags in `data/state/saved_cwl_wars.json`.
+7. Sleeps for `CWL_POLL_MINUTES`, defaulting to 30 minutes.
+
+CWL snapshots are written to:
+
+```text
+data/cwl_war_results/cwl_war_YYYY-MM-DD_HH-MM_<warTag>.json
+```
+
+Weekly and total history reports do not read CWL snapshots yet.
+
 ## Warning Message Flow
 
 Run:

@@ -5,6 +5,7 @@ Current Droplet state from the latest operator audit:
 ```text
 clashcommand.service       active Discord bot
 coc-war-snapshot.service  active final war snapshot watcher
+coc-cwl-snapshot.service  optional CWL war snapshot watcher
 coc-report-updater.timer  active 15-minute site updater
 coc-report-deploy.timer   disabled duplicate updater
 ```
@@ -13,6 +14,7 @@ This directory currently contains:
 
 ```text
 coc-war-snapshot.service
+coc-cwl-snapshot.service
 coc-report-updater.service
 coc-report-updater.timer
 coc-report-deploy.service
@@ -20,6 +22,8 @@ coc-report-deploy.timer
 ```
 
 Use `coc-war-snapshot.service` for the final war watcher.
+
+Use `coc-cwl-snapshot.service` for separate CWL capture. It writes `data/cwl_war_results/` and does not affect regular war reports.
 
 Use `coc-report-updater.service` and `coc-report-updater.timer` for the active static site updater. The timer runs every 15 minutes and executes:
 

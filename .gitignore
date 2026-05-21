@@ -24,6 +24,7 @@ data/state/
 data/current_war/
 data/wars/
 data/war_results/
+data/cwl_war_results/
 data/reports/
 clashcommand.sqlite3
 

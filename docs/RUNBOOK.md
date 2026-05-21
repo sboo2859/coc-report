@@ -19,6 +19,11 @@ coc-war-snapshot.service
   -> watches active wars through the Clash API
   -> saves completed final_war_*.json to data/war_results/
 
+coc-cwl-snapshot.service
+  -> runs schedule_cwl_snapshot.py continuously
+  -> watches CWL league group war tags
+  -> saves completed cwl_war_*.json to data/cwl_war_results/
+
 coc-report-updater.timer
   -> runs coc-report-updater.service every 15 minutes
   -> executes update_coc_report.sh
@@ -49,14 +54,17 @@ cd /opt/clashcommand/app
 
 systemctl status clashcommand
 systemctl status coc-war-snapshot
+systemctl status coc-cwl-snapshot
 systemctl status coc-report-updater
 systemctl list-timers | grep coc
 
 journalctl -u clashcommand -n 100 --no-pager
 journalctl -u coc-war-snapshot -n 100 --no-pager
+journalctl -u coc-cwl-snapshot -n 100 --no-pager
 journalctl -u coc-report-updater -n 100 --no-pager
 
 ls -l data/war_results
+ls -l data/cwl_war_results
 find data -maxdepth 3 -type f | sort | tail -50
 
 python3 build_site.py --include-current-war
@@ -67,9 +75,11 @@ Expected:
 
 - `clashcommand.service` is active for the Discord bot.
 - `coc-war-snapshot.service` is active or sleeping until the next war check/final snapshot.
+- `coc-cwl-snapshot.service` is active or sleeping until the next CWL poll.
 - `coc-report-updater.timer` is enabled and scheduled.
 - `coc-report-deploy.timer` should not be enabled if `coc-report-updater.timer` is active.
 - `data/war_results/` should gain `final_war_*.json` files after wars end.
+- `data/cwl_war_results/` should gain `cwl_war_*.json` files after CWL wars end.
 
 ## Environment Variables
 
@@ -113,6 +123,16 @@ Clash API
   -> site_output/index.html and site_output/history.html
 ```
 
+CWL war snapshots:
+
+```text
+Clash API
+  -> /clans/{clanTag}/currentwar/leaguegroup
+  -> /clanwarleagues/wars/{warTag}
+  -> schedule_cwl_snapshot.py
+  -> data/cwl_war_results/cwl_war_*.json
+```
+
 Deployment:
 
 ```text
@@ -141,6 +161,32 @@ find data/war_results -maxdepth 1 -type f -name 'final_war_*.json' | sort | tail
 ```
 
 If `data/war_results/` is empty, weekly and overall pages can still build, but they will show no historical report data.
+
+## How CWL Capture Works
+
+CWL capture is intentionally separate from regular war capture and reporting.
+
+```text
+schedule_cwl_snapshot.py
+  -> fetch current CWL league group
+  -> iterate rounds[].warTags
+  -> fetch each /clanwarleagues/wars/{warTag}
+  -> save only warEnded wars once
+```
+
+Saved CWL snapshots go here:
+
+```text
+data/cwl_war_results/cwl_war_*.json
+```
+
+Deduplication state lives here:
+
+```text
+data/state/saved_cwl_wars.json
+```
+
+Weekly and overall report pages do not read CWL files yet. Keep CWL separate until the capture is proven reliable and there is a clear decision about CWL-specific reports or merged totals.
 
 ## How Current War Updates
 
@@ -249,6 +295,38 @@ sudo systemctl daemon-reload
 sudo systemctl enable coc-war-snapshot
 sudo systemctl start coc-war-snapshot
 sudo systemctl status coc-war-snapshot
+```
+
+### CWL Snapshot Watcher
+
+```bash
+systemctl status coc-cwl-snapshot
+systemctl restart coc-cwl-snapshot
+journalctl -u coc-cwl-snapshot -n 100 --no-pager
+```
+
+Role:
+
+- Runs `schedule_cwl_snapshot.py` continuously.
+- Fetches the current CWL league group.
+- Fetches each CWL war by war tag.
+- Saves completed `cwl_war_*.json` files to `data/cwl_war_results/`.
+- Does not update weekly or overall reports.
+
+The repo includes a service template:
+
+```text
+systemd/coc-cwl-snapshot.service
+```
+
+Install example:
+
+```bash
+sudo cp systemd/coc-cwl-snapshot.service /etc/systemd/system/coc-cwl-snapshot.service
+sudo systemctl daemon-reload
+sudo systemctl enable coc-cwl-snapshot
+sudo systemctl start coc-cwl-snapshot
+sudo systemctl status coc-cwl-snapshot
 ```
 
 ### Report Updater Timer
@@ -428,6 +506,7 @@ If the updater reports no changes, the rebuilt `site_output/` matched the commit
 - `data/war_results/` was empty before final snapshot automation; weekly and overall pages need this directory populated.
 - `data/wars/` and `data/war_results/` are different. Reports use `data/war_results/`.
 - Current war data and final war report data are separate paths.
+- CWL snapshots are separate from regular war snapshots and are not used by public reports yet.
 - The Droplet interactive shell does not automatically load `.env`.
 - `CLASH_API_TOKEN`/`CLAN_TAG` and `COC_API_TOKEN`/`COC_CLAN_TAG` naming still needs cleanup.
 - `coc-report-deploy.timer` is duplicate automation and was disabled on the Droplet.

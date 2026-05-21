@@ -23,6 +23,10 @@ coc-war-snapshot.service
   -> schedule_war_snapshot.py
   -> data/war_results/final_war_*.json
 
+coc-cwl-snapshot.service
+  -> schedule_cwl_snapshot.py
+  -> data/cwl_war_results/cwl_war_*.json
+
 coc-report-updater.timer
   -> coc-report-updater.service every 15 minutes
   -> update_coc_report.sh
@@ -40,6 +44,8 @@ The duplicate `coc-report-deploy.timer` path was disabled on the Droplet. Keep o
 `fetch_war.py` is the shared API layer and manual fetch command. It supports `COC_API_TOKEN`/`COC_CLAN_TAG` and `CLASH_API_TOKEN`/`CLAN_TAG`, fetches `currentwar`, prints attack participation, saves manual snapshots to `data/wars/`, and writes the latest current-war snapshot to `data/current_war/latest_current_war.json`.
 
 `schedule_war_snapshot.py` is the long-running scheduler. It reuses `fetch_war.py`, watches the current war state, waits until `endTime` plus a buffer, and saves final snapshots to `data/war_results/`.
+
+`schedule_cwl_snapshot.py` is the separate long-running CWL scheduler. It fetches the current CWL league group, iterates round war tags, fetches each CWL war by tag, and saves ended CWL wars to `data/cwl_war_results/`.
 
 `war_warning_message.py` fetches the live current war and prints a copy/paste reminder for members with attacks remaining. It does not store data or send notifications.
 
@@ -84,6 +90,16 @@ site_output/index.html
    |
    v
 GitHub -> Cloudflare Pages
+
+Clash API CWL league group
+   |
+   v
+schedule_cwl_snapshot.py
+   |
+   +--> data/state/saved_cwl_wars.json
+   |
+   v
+data/cwl_war_results/              CWL final war snapshots
 
 data/war_results/
    |
@@ -133,6 +149,8 @@ Cloudflare Pages
 
 The scheduler imports both `fetch_current_war()` and `save_war_snapshot()`. It adds scheduling, dedupe, and final-result timing around those reusable helpers.
 
+The CWL scheduler uses the same API token/clan tag environment behavior but calls CWL endpoints separately. It does not feed `weekly_report.py` or `build_site.py` yet.
+
 The weekly report and total history page do not depend on live API access. Their input is the durable JSON output from the scheduler.
 
 The static site generator wraps the same weekly report logic in self-contained HTML. The generated `site_output/index.html` is committed to GitHub so Cloudflare Pages can deploy it without running Python.
@@ -158,6 +176,8 @@ Displayed site timestamps are formatted in Central Time using `ZoneInfo("America
 The final snapshot is taken after `endTime` plus a buffer because the API may need a short settlement window before final stars and destruction are stable.
 
 Manual snapshots and final snapshots are stored separately. `data/wars/` is useful for ad hoc inspection; `data/war_results/` is the historical source for reports.
+
+CWL snapshots are stored separately in `data/cwl_war_results/` with `_cwl` metadata. They should not be merged into weekly or overall reports until the desired reporting semantics are decided.
 
 Warnings are generated as text instead of sent automatically because Clash chat tagging and notification behavior cannot be safely automated through this project.
 
