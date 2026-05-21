@@ -1,0 +1,9 @@
+[Unit]
+Description=CoC Report Static Site Deploy
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/clashcommand/app
+EnvironmentFile=/opt/clashcommand/app/.env
+ExecStart=/opt/clashcommand/app/scripts/deploy_report_once.sh

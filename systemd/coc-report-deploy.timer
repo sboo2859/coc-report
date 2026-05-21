@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CoC Report Static Site Deploy Every 30 Minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+Unit=coc-report-deploy.service
+
+[Install]
+WantedBy=timers.target
