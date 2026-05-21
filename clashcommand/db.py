@@ -144,6 +144,20 @@ class LinkedPlayerStore:
 
         return row is not None
 
+    def reminder_types_for_war(self, guild_id, war_key):
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT reminder_type
+                FROM reminder_events
+                WHERE guild_id = ?
+                    AND war_key = ?
+                """,
+                (str(guild_id), war_key),
+            ).fetchall()
+
+        return {row["reminder_type"] for row in rows}
+
     def record_reminder_event(self, guild_id, war_key, reminder_type):
         with self.connect() as connection:
             connection.execute(

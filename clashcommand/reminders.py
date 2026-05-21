@@ -14,6 +14,11 @@ LOGGER = logging.getLogger("clashcommand.reminders")
 REMINDER_CHECK_SECONDS = 300
 THREE_HOURS_SECONDS = 3 * 60 * 60
 ONE_HOUR_SECONDS = 60 * 60
+REMINDER_GRACE_SECONDS = 10 * 60
+REMINDER_ORDER = {
+    "3h": 3,
+    "1h": 1,
+}
 
 
 def normalize_clan_tag(clan_tag):
@@ -28,11 +33,31 @@ def normalize_clan_tag(clan_tag):
 def due_reminder(seconds_left, sent_keys):
     if seconds_left <= 0:
         return None
-    if seconds_left <= ONE_HOUR_SECONDS and "1h" not in sent_keys:
+
+    if smaller_reminder_sent("3h", sent_keys):
+        return None
+
+    if threshold_due(seconds_left, ONE_HOUR_SECONDS) and "1h" not in sent_keys:
         return ("1h", "1 hour")
-    if seconds_left <= THREE_HOURS_SECONDS and "3h" not in sent_keys:
+
+    if threshold_due(seconds_left, THREE_HOURS_SECONDS) and "3h" not in sent_keys:
         return ("3h", "3 hours")
     return None
+
+
+def threshold_due(seconds_left, threshold_seconds, grace_seconds=REMINDER_GRACE_SECONDS):
+    return threshold_seconds - grace_seconds <= seconds_left <= threshold_seconds
+
+
+def smaller_reminder_sent(reminder_key, sent_keys):
+    reminder_order = REMINDER_ORDER.get(reminder_key)
+    if reminder_order is None:
+        return False
+
+    return any(
+        REMINDER_ORDER.get(sent_key, reminder_order) < reminder_order
+        for sent_key in sent_keys
+    )
 
 
 def build_war_reminder_message(label, war, linked_players=None):
@@ -120,11 +145,18 @@ class WarReminderScheduler:
                 continue
 
             seconds_left = int((end_time - datetime.now(timezone.utc)).total_seconds())
-            sent_keys = {
+            db_sent_keys = await asyncio.to_thread(
+                self.bot.linked_player_store.reminder_types_for_war,
+                guild_id,
+                key,
+            )
+            memory_sent_keys = {
                 reminder_key
                 for sent_guild_id, sent_war_key, reminder_key in self.sent_reminders
                 if sent_guild_id == guild_id and sent_war_key == key
             }
+            sent_keys = set(db_sent_keys)
+            sent_keys.update(memory_sent_keys)
             reminder = due_reminder(seconds_left, sent_keys)
             if reminder is None:
                 continue
