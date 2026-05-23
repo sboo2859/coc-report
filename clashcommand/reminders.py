@@ -14,7 +14,10 @@ LOGGER = logging.getLogger("clashcommand.reminders")
 REMINDER_CHECK_SECONDS = 300
 THREE_HOURS_SECONDS = 3 * 60 * 60
 ONE_HOUR_SECONDS = 60 * 60
-REMINDER_GRACE_SECONDS = 10 * 60
+THREE_HOUR_EARLY_SECONDS = 10 * 60
+THREE_HOUR_LATE_SECONDS = 15 * 60
+ONE_HOUR_EARLY_SECONDS = 10 * 60
+ONE_HOUR_LATE_SECONDS = 15 * 60
 REMINDER_ORDER = {
     "3h": 3,
     "1h": 1,
@@ -31,22 +34,49 @@ def normalize_clan_tag(clan_tag):
 
 
 def due_reminder(seconds_left, sent_keys):
+    reminder, _reason = reminder_decision(seconds_left, sent_keys)
+    return reminder
+
+
+def reminder_decision(seconds_left, sent_keys):
+    sent_keys = set(sent_keys)
     if seconds_left <= 0:
-        return None
+        return None, "war already ended"
 
     if smaller_reminder_sent("3h", sent_keys):
-        return None
+        return None, "1h reminder already sent; suppressing stale 3h reminder"
 
-    if threshold_due(seconds_left, ONE_HOUR_SECONDS) and "1h" not in sent_keys:
-        return ("1h", "1 hour")
+    if "1h" in sent_keys:
+        return None, "1h reminder already sent"
 
-    if threshold_due(seconds_left, THREE_HOURS_SECONDS) and "3h" not in sent_keys:
-        return ("3h", "3 hours")
-    return None
+    if threshold_due(
+        seconds_left,
+        ONE_HOUR_SECONDS,
+        early_seconds=ONE_HOUR_EARLY_SECONDS,
+        late_seconds=ONE_HOUR_LATE_SECONDS,
+    ):
+        return ("1h", "1 hour"), "1h reminder due"
+
+    if "3h" in sent_keys:
+        return None, "3h reminder already sent"
+
+    if threshold_due(
+        seconds_left,
+        THREE_HOURS_SECONDS,
+        early_seconds=THREE_HOUR_EARLY_SECONDS,
+        late_seconds=THREE_HOUR_LATE_SECONDS,
+    ):
+        return ("3h", "3 hours"), "3h reminder due"
+
+    return None, "outside reminder windows"
 
 
-def threshold_due(seconds_left, threshold_seconds, grace_seconds=REMINDER_GRACE_SECONDS):
-    return threshold_seconds - grace_seconds <= seconds_left <= threshold_seconds
+def threshold_due(seconds_left, threshold_seconds, early_seconds=0, late_seconds=0):
+    return (
+        threshold_seconds - late_seconds
+        <= seconds_left
+        <= threshold_seconds + early_seconds
+    )
 
 
 def smaller_reminder_sent(reminder_key, sent_keys):
@@ -58,6 +88,14 @@ def smaller_reminder_sent(reminder_key, sent_keys):
         REMINDER_ORDER.get(sent_key, reminder_order) < reminder_order
         for sent_key in sent_keys
     )
+
+
+def minutes_left(seconds_left):
+    return round(seconds_left / 60, 1)
+
+
+def sorted_reminder_keys(sent_keys):
+    return sorted(str(sent_key) for sent_key in sent_keys)
 
 
 def build_war_reminder_message(label, war, linked_players=None):
@@ -102,20 +140,55 @@ class WarReminderScheduler:
             LOGGER.info("Stopped war reminder scheduler.")
 
     async def check_current_war(self):
+        LOGGER.info("War reminder check started.")
         saved_channels = await asyncio.to_thread(
             self.bot.linked_player_store.reminder_channels
         )
         channel_by_guild = dict(self.bot.command_channels)
         channel_by_guild.update(saved_channels)
 
+        if not self.bot.command_channels:
+            LOGGER.info(
+                "War reminder check has no recently seen command channels: "
+                "saved_reminder_channels=%s",
+                len(saved_channels),
+            )
+
+        if not saved_channels:
+            LOGGER.info(
+                "War reminder check has no reminder channels configured: "
+                "recent_command_channels=%s",
+                len(self.bot.command_channels),
+            )
+
         if not channel_by_guild:
-            LOGGER.debug("Skipping reminder check; no command channel has been seen yet.")
+            LOGGER.info(
+                "War reminder check skipped: reason=%s recent_command_channels=%s "
+                "saved_reminder_channels=%s",
+                "no command channel seen and no reminder channels configured",
+                len(self.bot.command_channels),
+                len(saved_channels),
+            )
             return
 
         for guild_id, channel_id in list(channel_by_guild.items()):
             clan_tag = await self.clan_tag_for_guild(guild_id)
             if not clan_tag:
-                LOGGER.debug("Skipping reminder check for guild %s; no clan configured.", guild_id)
+                LOGGER.info(
+                    "War reminder evaluation skipped: guild_id=%s clan_tag=%s "
+                    "war_state=%s war_key=%s war_end_time=%s seconds_left=%s "
+                    "minutes_left=%s sqlite_sent=%s memory_sent=%s reason=%s",
+                    guild_id,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    [],
+                    [],
+                    "no clan configured",
+                )
                 continue
 
             try:
@@ -124,24 +197,78 @@ class WarReminderScheduler:
                     clan_tag,
                 )
             except ClashApiError as exc:
-                LOGGER.warning("Could not fetch current war for reminders: %s", exc)
+                LOGGER.info(
+                    "War reminder evaluation skipped: guild_id=%s clan_tag=%s "
+                    "reason=%s error=%s",
+                    guild_id,
+                    clan_tag,
+                    "could not fetch current war",
+                    exc,
+                )
                 continue
             except Exception:
-                LOGGER.exception("Unexpected error while checking war reminders.")
+                LOGGER.exception(
+                    "Unexpected error while checking war reminders: guild_id=%s clan_tag=%s",
+                    guild_id,
+                    clan_tag,
+                )
                 continue
 
             overview = current_war_overview(war)
+            key = stable_war_key(war)
             if overview["state"] != "inWar":
+                LOGGER.info(
+                    "War reminder evaluation skipped: guild_id=%s clan_tag=%s "
+                    "war_state=%s war_key=%s war_end_time=%s seconds_left=%s "
+                    "minutes_left=%s sqlite_sent=%s memory_sent=%s reason=%s",
+                    guild_id,
+                    clan_tag,
+                    overview["state"],
+                    key,
+                    overview["end_time"],
+                    None,
+                    None,
+                    [],
+                    [],
+                    "war is not inWar",
+                )
                 continue
 
             end_time = overview["end_time"]
             if end_time is None:
-                LOGGER.warning("Current war is inWar but has no parseable end time.")
+                LOGGER.info(
+                    "War reminder evaluation skipped: guild_id=%s clan_tag=%s "
+                    "war_state=%s war_key=%s war_end_time=%s seconds_left=%s "
+                    "minutes_left=%s sqlite_sent=%s memory_sent=%s reason=%s",
+                    guild_id,
+                    clan_tag,
+                    overview["state"],
+                    None,
+                    None,
+                    None,
+                    None,
+                    [],
+                    [],
+                    "current war has no parseable end time",
+                )
                 continue
 
-            key = stable_war_key(war)
             if not key:
-                LOGGER.warning("Current war has no stable key; skipping reminders.")
+                LOGGER.info(
+                    "War reminder evaluation skipped: guild_id=%s clan_tag=%s "
+                    "war_state=%s war_key=%s war_end_time=%s seconds_left=%s "
+                    "minutes_left=%s sqlite_sent=%s memory_sent=%s reason=%s",
+                    guild_id,
+                    clan_tag,
+                    overview["state"],
+                    None,
+                    end_time.isoformat(),
+                    None,
+                    None,
+                    [],
+                    [],
+                    "current war has no stable key",
+                )
                 continue
 
             seconds_left = int((end_time - datetime.now(timezone.utc)).total_seconds())
@@ -157,7 +284,24 @@ class WarReminderScheduler:
             }
             sent_keys = set(db_sent_keys)
             sent_keys.update(memory_sent_keys)
-            reminder = due_reminder(seconds_left, sent_keys)
+            reminder, decision_reason = reminder_decision(seconds_left, sent_keys)
+            selected_reminder = reminder[0] if reminder else None
+            LOGGER.info(
+                "War reminder evaluation: guild_id=%s clan_tag=%s war_state=%s "
+                "war_key=%s war_end_time=%s seconds_left=%s minutes_left=%s "
+                "sqlite_sent=%s memory_sent=%s selected=%s reason=%s",
+                guild_id,
+                clan_tag,
+                overview["state"],
+                key,
+                end_time.isoformat(),
+                seconds_left,
+                minutes_left(seconds_left),
+                sorted_reminder_keys(db_sent_keys),
+                sorted_reminder_keys(memory_sent_keys),
+                selected_reminder,
+                decision_reason,
+            )
             if reminder is None:
                 continue
 
@@ -194,18 +338,36 @@ class WarReminderScheduler:
         )
         if already_sent:
             self.sent_reminders.add((guild_id, war_key, reminder_key))
-            LOGGER.debug(
-                "Skipping already-recorded %s war reminder for guild %s.",
-                reminder_key,
+            LOGGER.info(
+                "War reminder send skipped: guild_id=%s war_key=%s "
+                "reminder_type=%s reason=%s",
                 guild_id,
+                war_key,
+                reminder_key,
+                "reminder already recorded in SQLite",
+            )
+            return
+
+        if (guild_id, war_key, reminder_key) in self.sent_reminders:
+            LOGGER.info(
+                "War reminder send skipped: guild_id=%s war_key=%s "
+                "reminder_type=%s reason=%s",
+                guild_id,
+                war_key,
+                reminder_key,
+                "reminder already present in in-memory cache",
             )
             return
 
         channel = await self.resolve_sendable_channel(channel_id, fallback_channel_id)
         if channel is None:
             LOGGER.warning(
-                "Could not resolve a sendable reminder channel for guild %s.",
+                "War reminder send skipped: guild_id=%s war_key=%s "
+                "reminder_type=%s reason=%s",
                 guild_id,
+                war_key,
+                reminder_key,
+                "could not resolve a sendable reminder channel",
             )
             return
 
@@ -218,8 +380,12 @@ class WarReminderScheduler:
         sent = await self.send_to_reminder_channel(channel_id, fallback_channel_id, message)
         if not sent:
             LOGGER.warning(
-                "Could not send war reminder to any channel for guild %s.",
+                "War reminder send skipped: guild_id=%s war_key=%s "
+                "reminder_type=%s reason=%s",
                 guild_id,
+                war_key,
+                reminder_key,
+                "could not send to any reminder channel",
             )
             return
 
@@ -230,7 +396,12 @@ class WarReminderScheduler:
             reminder_key,
         )
         self.sent_reminders.add((guild_id, war_key, reminder_key))
-        LOGGER.info("Sent %s war reminder for guild %s.", reminder_key, guild_id)
+        LOGGER.info(
+            "War reminder sent: guild_id=%s war_key=%s reminder_type=%s",
+            guild_id,
+            war_key,
+            reminder_key,
+        )
 
     async def resolve_sendable_channel(self, channel_id, fallback_channel_id=None):
         candidate_ids = []
