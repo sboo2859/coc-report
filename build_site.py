@@ -24,7 +24,7 @@ def parse_args():
     parser.add_argument(
         "--live-current-war-fallback",
         action="store_true",
-        help="Call the Clash API if the current war snapshot file is unavailable.",
+        help="Refresh current war from the Clash API, falling back to the snapshot file if unavailable.",
     )
     return parser.parse_args()
 
@@ -46,15 +46,22 @@ def load_current_war_for_site(input_path):
 
 def fetch_current_war_for_site(output_path=None):
     try:
-        war, _status_code = fetch_current_war()
+        war, status_code = fetch_current_war()
     except Exception as exc:
-        print(f"Current war data unavailable ({exc}); writing fallback page.")
+        print(f"Live current war data unavailable ({exc}); falling back to snapshot.")
         return None
+
+    state = war.get("state", "unknown")
+    clan_name = war.get("clan", {}).get("name") or war.get("clan", {}).get("tag") or "unknown"
+    opponent_name = war.get("opponent", {}).get("name") or war.get("opponent", {}).get("tag") or "unknown"
+    print(
+        "Fetched live current war for site: "
+        f"status_code={status_code} state={state} clan={clan_name!r} opponent={opponent_name!r}."
+    )
 
     if output_path:
         try:
             save_latest_current_war(war, output_path=output_path)
-            print(f"Saved latest current war snapshot to {output_path}.")
         except Exception as exc:
             print(f"Could not save latest current war snapshot ({output_path}: {exc}).")
 
@@ -75,10 +82,14 @@ def main():
     print(f"Wrote total history site: {history_path}")
 
     if args.include_current_war:
-        current_war = load_current_war_for_site(args.current_war_file)
-        if current_war is None and args.live_current_war_fallback:
+        current_war = None
+        if args.live_current_war_fallback:
             current_war = fetch_current_war_for_site(output_path=args.current_war_file)
-        elif current_war is None:
+
+        if current_war is None:
+            current_war = load_current_war_for_site(args.current_war_file)
+
+        if current_war is None:
             print("Current war data unavailable; writing fallback page.")
 
         current_war_path = write_current_war_site(war=current_war)

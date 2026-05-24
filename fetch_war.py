@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import quote
 
 
@@ -139,6 +139,18 @@ def save_latest_current_war(data, output_path=DEFAULT_CURRENT_WAR_FILE):
     with open(tmp_file, "w") as f:
         json.dump(data, f, indent=2)
     os.replace(tmp_file, output_path)
+
+    state = data.get("state", "unknown")
+    clan_name = data.get("clan", {}).get("name") or data.get("clan", {}).get("tag") or "unknown"
+    opponent_name = data.get("opponent", {}).get("name") or data.get("opponent", {}).get("tag") or "unknown"
+    refreshed_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    print(
+        "Refreshed latest current war snapshot: "
+        f"refreshed_at={refreshed_at} "
+        f"state={state} clan={clan_name!r} opponent={opponent_name!r} "
+        f"path={os.path.abspath(output_path)}",
+        flush=True,
+    )
 
     return output_path
 
