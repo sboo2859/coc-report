@@ -154,8 +154,62 @@ def war_key(data):
 def save_final_snapshot(data, saved_wars, scheduled_war=None):
     live_key = war_key(data)
     scheduled_key = (scheduled_war or {}).get("war_key")
-    key = live_key or scheduled_key
-    used_persisted_identity = live_key is None and scheduled_key is not None
+
+    if scheduled_key:
+        keys_matched = live_key == scheduled_key
+        rejected_mismatched_live = live_key is not None and not keys_matched
+        used_persisted_identity = not keys_matched
+        key = scheduled_key
+
+        log(
+            "Resolving scheduled final snapshot identity: "
+            f"scheduled_key={scheduled_key} live_key={live_key} "
+            f"keys_matched={keys_matched} "
+            f"persisted_payload_fallback={used_persisted_identity} "
+            f"rejected_mismatched_live={rejected_mismatched_live}"
+        )
+
+        if rejected_mismatched_live:
+            log(
+                "Rejected live payload for scheduled final snapshot because it "
+                f"belongs to a different war: scheduled_key={scheduled_key} "
+                f"live_key={live_key} live_state={data.get('state', 'unknown')}"
+            )
+
+        if key in saved_wars:
+            log(f"Already saved this war; skipping. war_key={key}")
+            clear_scheduled_war(key)
+            return False
+
+        if keys_matched:
+            snapshot_data = data
+        elif scheduled_war and scheduled_war.get("war"):
+            snapshot_data = scheduled_war["war"]
+        else:
+            log(
+                "Could not save scheduled final snapshot: live payload did not "
+                "match scheduled war and no persisted scheduled payload is available. "
+                f"scheduled_key={scheduled_key} live_key={live_key}"
+            )
+            clear_scheduled_war(scheduled_key)
+            return False
+
+        filename = save_war_snapshot(snapshot_data, output_dir=FINAL_WAR_DIR, prefix="final_war")
+        saved_wars.add(key)
+        write_saved_wars(saved_wars)
+        clear_scheduled_war(key)
+        log(
+            "Saved final war snapshot: "
+            f"war_key={key} scheduled_key={scheduled_key} live_key={live_key} "
+            f"keys_matched={keys_matched} "
+            f"persisted_identity_fallback={used_persisted_identity} "
+            f"rejected_mismatched_live={rejected_mismatched_live} "
+            f"path={filename}"
+        )
+        return True
+
+    key = live_key
+    used_persisted_identity = False
 
     if not key:
         log("Could not build a stable war key; skipping save to avoid duplicate snapshots.")
@@ -220,10 +274,12 @@ def resolve_due_scheduled_war(saved_wars, fallback_minutes):
 
     final_state = final_data.get("state", "unknown")
     final_key = war_key(final_data)
-    persisted_identity_fallback = final_key is None
+    keys_matched = final_key == scheduled_key
+    persisted_identity_fallback = not keys_matched
     log(
         "Fetched scheduled final snapshot: "
         f"api_state={final_state} scheduled_war_key={scheduled_key} "
+        f"live_key={final_key} keys_matched={keys_matched} "
         f"scheduled_end_time={scheduled_war.get('end_time')} "
         f"persisted_identity_fallback={persisted_identity_fallback}"
     )
@@ -277,10 +333,13 @@ def handle_in_war(data, saved_wars, buffer_minutes, fallback_minutes):
 
     final_state = final_data.get("state", "unknown")
     final_key = war_key(final_data)
-    persisted_identity_fallback = final_key is None
+    scheduled_key = scheduled_war.get("war_key")
+    keys_matched = final_key == scheduled_key
+    persisted_identity_fallback = not keys_matched
     log(
         "Fetched scheduled final snapshot: "
-        f"api_state={final_state} scheduled_war_key={scheduled_war.get('war_key')} "
+        f"api_state={final_state} scheduled_war_key={scheduled_key} "
+        f"live_key={final_key} keys_matched={keys_matched} "
         f"scheduled_end_time={scheduled_war.get('end_time')} "
         f"persisted_identity_fallback={persisted_identity_fallback}"
     )
