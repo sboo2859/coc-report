@@ -1,4 +1,5 @@
 import argparse
+import os
 
 from fetch_war import (
     DEFAULT_CURRENT_WAR_FILE,
@@ -6,7 +7,18 @@ from fetch_war import (
     load_latest_current_war,
     save_latest_current_war,
 )
-from weekly_report import generate_weekly_report_data, write_current_war_site, write_history_site, write_site
+from weekly_report import (
+    DEFAULT_SITE_OUTPUT_DIR,
+    generate_weekly_report_data,
+    write_current_war_site,
+    write_history_site,
+    write_site,
+)
+
+
+CLOUDFLARE_HEADERS = """/current-war.html
+  Cache-Control: no-cache, no-store, must-revalidate
+"""
 
 
 def parse_args():
@@ -68,6 +80,13 @@ def fetch_current_war_for_site(output_path=None):
     return war
 
 
+def write_cloudflare_headers(output_dir=DEFAULT_SITE_OUTPUT_DIR):
+    output_path = os.path.join(output_dir, "_headers")
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(CLOUDFLARE_HEADERS)
+    return output_path
+
+
 def main():
     args = parse_args()
     report_data = generate_weekly_report_data()
@@ -80,6 +99,9 @@ def main():
 
     history_path = write_history_site()
     print(f"Wrote total history site: {history_path}")
+
+    headers_path = write_cloudflare_headers()
+    print(f"Wrote Cloudflare Pages headers: {headers_path}")
 
     if args.include_current_war:
         current_war = None
