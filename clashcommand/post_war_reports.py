@@ -3,6 +3,7 @@ import glob
 import json
 import logging
 import os
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -15,6 +16,33 @@ LOGGER = logging.getLogger("clashcommand.post_war_reports")
 POST_WAR_REPORT_CHECK_SECONDS = 300
 DEFAULT_WAR_RESULTS_DIR = "data/war_results"
 POST_WAR_REPORT_REMINDER_TYPE = "post_war_report"
+
+
+@dataclass
+class PostWarReportResult:
+    sent_count: int = 0
+    skipped_count: int = 0
+    failed_count: int = 0
+    already_posted_count: int = 0
+    reasons: list = field(default_factory=list)
+
+    def add_skip(self, reason):
+        self.skipped_count += 1
+        self.reasons.append(reason)
+
+    def add_failure(self, reason):
+        self.failed_count += 1
+        self.reasons.append(reason)
+
+    def add_sent(self):
+        self.sent_count += 1
+
+    def add_already_posted(self):
+        self.already_posted_count += 1
+        self.add_skip("already posted according to SQLite")
+
+    def should_mark_seen(self):
+        return self.sent_count > 0 or self.already_posted_count > 0
 
 
 def text_or_default(value, default="Unknown"):
@@ -263,23 +291,63 @@ class PostWarReportScheduler:
             key = stable_war_key(war)
             if key:
                 self.seen_war_keys.add(key)
-        LOGGER.info("Marked %s existing completed war(s) as seen.", len(self.seen_war_keys))
+        LOGGER.info(
+            "Post-war recap startup preload marked %s existing completed war(s) as seen: "
+            "reason=%s",
+            len(self.seen_war_keys),
+            "historical snapshot anti-spam guard",
+        )
 
     async def check_completed_wars(self):
         for path, war in load_war_snapshots(self.data_dir):
             key = stable_war_key(war)
-            if not key or key in self.seen_war_keys:
+            if not key:
+                LOGGER.warning("Skipping post-war recap for %s: no stable war key.", path)
+                continue
+
+            if key in self.seen_war_keys:
                 continue
 
             mtime = war_file_mtime(path)
             if mtime is not None and mtime < self.startup_time:
                 self.seen_war_keys.add(key)
+                LOGGER.info(
+                    "Post-war recap seen marker added: war_key=%s path=%s reason=%s",
+                    key,
+                    path,
+                    "snapshot predates scheduler startup",
+                )
                 continue
 
-            await self.post_war_to_configured_guilds(key, war)
-            self.seen_war_keys.add(key)
+            result = await self.post_war_to_configured_guilds(key, war)
+            if result.should_mark_seen():
+                self.seen_war_keys.add(key)
+                LOGGER.info(
+                    "Post-war recap seen marker added: war_key=%s path=%s "
+                    "sent_count=%s already_posted_count=%s skipped_count=%s "
+                    "failed_count=%s reasons=%s",
+                    key,
+                    path,
+                    result.sent_count,
+                    result.already_posted_count,
+                    result.skipped_count,
+                    result.failed_count,
+                    result.reasons,
+                )
+            else:
+                LOGGER.warning(
+                    "Post-war recap not marked seen; will retry: war_key=%s path=%s "
+                    "sent_count=%s skipped_count=%s failed_count=%s reasons=%s",
+                    key,
+                    path,
+                    result.sent_count,
+                    result.skipped_count,
+                    result.failed_count,
+                    result.reasons,
+                )
 
     async def post_war_to_configured_guilds(self, war_key, war):
+        result = PostWarReportResult()
         saved_channels = await asyncio.to_thread(
             self.bot.linked_player_store.reminder_channels
         )
@@ -287,16 +355,45 @@ class PostWarReportScheduler:
         channel_by_guild.update(saved_channels)
 
         if not channel_by_guild:
-            LOGGER.debug("Skipping post-war report; no configured channel is known.")
-            return
+            reason = "no configured recap channels"
+            result.add_skip(reason)
+            LOGGER.warning(
+                "Skipping post-war report: war_key=%s reason=%s saved_channels=%s "
+                "recent_command_channels=%s",
+                war_key,
+                reason,
+                len(saved_channels),
+                len(self.bot.command_channels),
+            )
+            return result
+
+        matched_guild = False
 
         for guild_id, channel_id in list(channel_by_guild.items()):
             clan_tag = await self.clan_tag_for_guild(guild_id)
             if not clan_tag:
+                result.add_skip(f"guild {guild_id}: no clan configured")
+                LOGGER.info(
+                    "Skipping post-war report for guild: guild_id=%s war_key=%s reason=%s",
+                    guild_id,
+                    war_key,
+                    "no clan configured",
+                )
                 continue
             if normalize_clan_tag(war.get("clan", {}).get("tag")) != normalize_clan_tag(clan_tag):
+                result.add_skip(f"guild {guild_id}: clan mismatch")
+                LOGGER.info(
+                    "Skipping post-war report for guild: guild_id=%s war_key=%s "
+                    "reason=%s configured_clan=%s snapshot_clan=%s",
+                    guild_id,
+                    war_key,
+                    "clan mismatch",
+                    clan_tag,
+                    war.get("clan", {}).get("tag"),
+                )
                 continue
 
+            matched_guild = True
             already_posted = await asyncio.to_thread(
                 self.bot.linked_player_store.has_reminder_event,
                 guild_id,
@@ -304,16 +401,37 @@ class PostWarReportScheduler:
                 POST_WAR_REPORT_REMINDER_TYPE,
             )
             if already_posted:
+                result.add_already_posted()
+                LOGGER.info(
+                    "Skipping post-war report send: guild_id=%s war_key=%s reason=%s",
+                    guild_id,
+                    war_key,
+                    "already recorded in SQLite",
+                )
                 continue
 
-            sent = await self.send_report(guild_id, channel_id, war_key, war)
+            sent, reason = await self.send_report(guild_id, channel_id, war_key, war)
             if sent:
+                result.add_sent()
                 await asyncio.to_thread(
                     self.bot.linked_player_store.record_reminder_event,
                     guild_id,
                     war_key,
                     POST_WAR_REPORT_REMINDER_TYPE,
                 )
+            else:
+                result.add_failure(f"guild {guild_id}: {reason}")
+
+        if not matched_guild:
+            result.add_skip("no configured guild matched snapshot clan")
+            LOGGER.warning(
+                "Skipping post-war report: war_key=%s reason=%s snapshot_clan=%s",
+                war_key,
+                "no configured guild matched snapshot clan",
+                war.get("clan", {}).get("tag"),
+            )
+
+        return result
 
     async def clan_tag_for_guild(self, guild_id):
         stored_clan_tag = await asyncio.to_thread(
@@ -330,19 +448,38 @@ class PostWarReportScheduler:
     async def send_report(self, guild_id, channel_id, war_key, war):
         channel = await self.resolve_sendable_channel(channel_id)
         if channel is None:
-            LOGGER.warning("Could not resolve post-war report channel for guild %s.", guild_id)
-            return False
+            reason = "no sendable recap channel"
+            LOGGER.warning(
+                "Could not send post-war report: guild_id=%s war_key=%s channel_id=%s reason=%s",
+                guild_id,
+                war_key,
+                channel_id,
+                reason,
+            )
+            return False, reason
 
         website_url = os.environ.get("REPORT_SITE_URL", "").strip()
         message = build_post_war_report(war, website_url=website_url)
         try:
             await channel.send(message)
-        except Exception:
-            LOGGER.warning("Could not send post-war report to channel %s.", channel_id)
-            return False
+        except Exception as exc:
+            reason = f"Discord send failed: {exc}"
+            LOGGER.warning(
+                "Could not send post-war report: guild_id=%s war_key=%s channel_id=%s reason=%s",
+                guild_id,
+                war_key,
+                channel_id,
+                reason,
+            )
+            return False, reason
 
-        LOGGER.info("Posted war recap for guild %s and war %s.", guild_id, war_key)
-        return True
+        LOGGER.info(
+            "Posted war recap: guild_id=%s war_key=%s channel_id=%s",
+            guild_id,
+            war_key,
+            channel_id,
+        )
+        return True, "sent"
 
     async def resolve_sendable_channel(self, channel_id):
         try:
