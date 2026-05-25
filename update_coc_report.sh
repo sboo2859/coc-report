@@ -42,9 +42,15 @@ sync_with_origin() {
   fi
 
   if [[ "${remote_head}" == "${merge_base}" ]]; then
-    echo "ERROR: Local branch has unpushed commits ahead of ${REMOTE_REF}." >&2
-    echo "Refusing to continue automatically; push or reconcile manually." >&2
-    exit 1
+    if [[ -n "$(git status --porcelain)" ]]; then
+      echo "ERROR: Local branch is ahead of ${REMOTE_REF}, but the working tree is dirty." >&2
+      echo "Refusing to push while local changes are present. Resolve the working tree and rerun." >&2
+      exit 1
+    fi
+
+    echo "Local branch ahead; pushing existing commits before build..."
+    git push "${REMOTE_NAME}" "HEAD:${TARGET_BRANCH}"
+    return
   fi
 
   echo "ERROR: Local branch has diverged from ${REMOTE_REF}." >&2
