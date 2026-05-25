@@ -117,6 +117,26 @@ def optional_number(value):
     return value if isinstance(value, (int, float)) else None
 
 
+def normalize_player_tag(tag):
+    normalized = str(tag or "").strip().upper()
+    if not normalized:
+        return ""
+    if not normalized.startswith("#"):
+        normalized = f"#{normalized}"
+    return normalized
+
+
+def town_hall_level(member):
+    values = (member.get("townHallLevel"), member.get("townhallLevel"))
+    for value in values:
+        if isinstance(value, (int, float)):
+            return value
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def get_attacks_allowed(war):
     attacks_allowed = war.get("attacksPerMember", 2)
     if not isinstance(attacks_allowed, int) or attacks_allowed <= 0:
@@ -132,15 +152,19 @@ def member_attacks(member):
 
 
 def player_record(stats, member):
-    tag = member.get("tag") or member.get("name") or "Unknown"
+    raw_tag = member.get("tag")
+    normalized_tag = normalize_player_tag(raw_tag)
+    tag = normalized_tag or raw_tag or member.get("name") or "Unknown"
+    display_tag = raw_tag or tag
     name = member.get("name") or "Unknown"
+    town_hall = town_hall_level(member)
 
     if tag not in stats:
         stats[tag] = {
             "name": name,
-            "tag": tag,
+            "tag": display_tag,
             "role": text_or_default(member.get("role"), "N/A"),
-            "town_hall": member.get("townHallLevel"),
+            "town_hall": town_hall,
             "trophies": member.get("trophies"),
             "donations": member.get("donations"),
             "donations_received": member.get("donationsReceived"),
@@ -159,13 +183,16 @@ def player_record(stats, member):
     elif name != "Unknown":
         stats[tag]["name"] = name
 
-    for field in ("role", "townHallLevel", "trophies", "donations", "donationsReceived"):
+    if display_tag:
+        stats[tag]["tag"] = display_tag
+    if town_hall is not None:
+        stats[tag]["town_hall"] = town_hall
+
+    for field in ("role", "trophies", "donations", "donationsReceived"):
         value = member.get(field)
         if value is None:
             continue
-        if field == "townHallLevel":
-            stats[tag]["town_hall"] = value
-        elif field == "donationsReceived":
+        if field == "donationsReceived":
             stats[tag]["donations_received"] = value
             if isinstance(value, (int, float)):
                 if stats[tag]["first_donations_received"] is None:
@@ -425,12 +452,34 @@ def build_report(totals, days):
     return "\n".join(lines)
 
 
+def log_roster_field_summary(label, totals):
+    players = totals.get("players", {})
+    total_players = len(players)
+    town_hall_count = sum(1 for player in players.values() if player.get("town_hall") is not None)
+    role_count = sum(1 for player in players.values() if player.get("role") not in (None, "N/A"))
+    trophy_count = sum(1 for player in players.values() if player.get("trophies") is not None)
+    donation_count = sum(1 for player in players.values() if player.get("donations") is not None)
+    received_count = sum(1 for player in players.values() if player.get("donations_received") is not None)
+
+    print(
+        f"{label} roster summary: "
+        f"players={total_players} "
+        f"town_hall={town_hall_count} "
+        f"missing_town_hall={total_players - town_hall_count} "
+        f"role={role_count} "
+        f"trophies={trophy_count} "
+        f"donations={donation_count} "
+        f"received={received_count}"
+    )
+
+
 def generate_weekly_report_data(days=None, data_dir=DEFAULT_WAR_RESULTS_DIR):
     report_days = days if days and days > 0 else env_int("REPORT_DAYS", DEFAULT_REPORT_DAYS)
     loaded_wars = load_war_files(data_dir)
     recent_wars = filter_recent_wars(loaded_wars, report_days)
     totals = aggregate_wars(recent_wars)
     summary = report_summary(totals)
+    log_roster_field_summary("Weekly report", totals)
 
     return {
         "days": report_days,
@@ -447,6 +496,7 @@ def generate_history_report_data(data_dir=DEFAULT_WAR_RESULTS_DIR):
     history_wars = dedupe_wars(loaded_wars)
     totals = aggregate_wars(history_wars)
     summary = report_summary(totals)
+    log_roster_field_summary("History report", totals)
 
     return {
         "days": None,
