@@ -2,7 +2,7 @@ import asyncio
 import logging
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import discord
 from discord import app_commands
@@ -10,7 +10,14 @@ from discord.ext import commands
 
 from clashcommand.clash.client import ClashApiError, ClashClient
 from clashcommand.clash.time import format_central_time, parse_optional_coc_time
-from clashcommand.clash.war import current_war_overview
+from clashcommand.clash.war import (
+    attacks_per_member,
+    clan_members,
+    current_war_overview,
+    member_attacks,
+    stable_war_key,
+    text_or_default,
+)
 from clashcommand.config import ConfigError, load_settings
 from clashcommand.db import LinkedPlayerStore
 from clashcommand.formatting import (
@@ -23,12 +30,15 @@ from clashcommand.post_war_reports import (
     PostWarReportScheduler,
     build_post_war_report,
     latest_war_snapshot,
+    load_war_snapshots,
 )
 from clashcommand.reminders import WarReminderScheduler
 
 
 LOGGER = logging.getLogger("clashcommand")
 PLAYER_TAG_PATTERN = re.compile(r"^#?[0289PYLQGRJCUV]+$", re.IGNORECASE)
+MISSED_30D_DAYS = 30
+MISSED_30D_LIMIT = 20
 
 
 def configure_logging():
@@ -156,6 +166,134 @@ def build_roster_unlinked_response(clan_members, linked_players=None):
         return "All players are linked."
 
     return "\n".join(["⚠️ Unlinked Players:", *unlinked_names])
+
+
+def war_side_for_clan(war, clan_tag):
+    normalized_tag = normalize_clan_tag(clan_tag)
+    for side_name in ("clan", "opponent"):
+        side = war.get(side_name, {})
+        if normalize_clan_tag(side.get("tag")) == normalized_tag:
+            return side
+    return None
+
+
+def recent_regular_war_snapshots(clan_tag, days=MISSED_30D_DAYS):
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=days)
+    seen = set()
+    wars = []
+    skipped_no_end_time = 0
+
+    for path, war in load_war_snapshots():
+        war_key = stable_war_key(war) or path
+        if war_key in seen:
+            continue
+
+        end_time = parse_optional_coc_time(war.get("endTime"))
+        if end_time is None:
+            skipped_no_end_time += 1
+            continue
+        if end_time < cutoff or end_time > now:
+            continue
+        if war_side_for_clan(war, clan_tag) is None:
+            continue
+
+        seen.add(war_key)
+        wars.append((path, war))
+
+    LOGGER.info(
+        "Loaded %s regular war snapshot(s) from the last %s days for %s; skipped %s without endTime.",
+        len(wars),
+        days,
+        clan_tag,
+        skipped_no_end_time,
+    )
+    return wars
+
+
+def build_missed_30d_response(clan_tag, days=MISSED_30D_DAYS, limit=MISSED_30D_LIMIT):
+    wars = recent_regular_war_snapshots(clan_tag, days)
+    if not wars:
+        return f"No completed regular war snapshots were found for `{clan_tag}` in the last {days} days."
+
+    players = {}
+    total_missed = 0
+
+    for _path, war in wars:
+        side = war_side_for_clan(war, clan_tag)
+        if side is None:
+            continue
+
+        war_for_side = dict(war)
+        war_for_side["clan"] = side
+        allowed = attacks_per_member(war_for_side)
+
+        for member in clan_members(war_for_side):
+            raw_tag = member.get("tag")
+            normalized_tag = normalize_player_tag(raw_tag)
+            player_key = normalized_tag or text_or_default(member.get("name"))
+            attacks_used = len(member_attacks(member))
+            missed = max(0, allowed - attacks_used)
+
+            record = players.setdefault(
+                player_key,
+                {
+                    "name": text_or_default(member.get("name")),
+                    "tag": raw_tag or player_key,
+                    "missed": 0,
+                    "wars": 0,
+                    "possible": 0,
+                },
+            )
+            if member.get("name"):
+                record["name"] = text_or_default(member.get("name"))
+            if raw_tag:
+                record["tag"] = raw_tag
+
+            record["wars"] += 1
+            record["possible"] += allowed
+            record["missed"] += missed
+            total_missed += missed
+
+    missed_players = [player for player in players.values() if player["missed"] > 0]
+    if not missed_players:
+        return f"No missed attacks in the last {days} days."
+
+    missed_players.sort(
+        key=lambda player: (
+            -player["missed"],
+            -(player["missed"] / player["possible"] if player["possible"] else 0),
+            player["name"].lower(),
+        )
+    )
+
+    lines = [
+        f"**Missed attacks - last {days} days**",
+        f"Regular wars counted: `{len(wars)}` | Missed attacks: `{total_missed}`",
+        "",
+    ]
+    for index, player in enumerate(missed_players[:limit], start=1):
+        attack_label = "attack" if player["missed"] == 1 else "attacks"
+        war_label = "war" if player["wars"] == 1 else "wars"
+        missed_rate = (
+            f"{round((player['missed'] / player['possible']) * 100)}%"
+            if player["possible"]
+            else "N/A"
+        )
+        lines.append(
+            f"{index}. **{player['name']}** - {player['missed']} {attack_label} "
+            f"missed over {player['wars']} {war_label} ({missed_rate})"
+        )
+
+    extra_count = len(missed_players) - limit
+    if extra_count > 0:
+        lines.append(f"...and {extra_count} more player(s).")
+
+    response = "\n".join(lines)
+    if len(response) <= 2000:
+        return response
+
+    return "\n".join(lines[:3 + max(0, limit // 2)] + ["List truncated to fit Discord."])
 
 
 def cwl_group_war_tags(group):
@@ -690,6 +828,21 @@ def create_bot(settings):
 
         linked_players = await load_linked_players(bot, guild_id)
         await interaction.followup.send(build_missed_response(current_war, linked_players))
+
+    @bot.tree.command(name="missed-30d", description="Rank missed attacks from regular wars in the last 30 days.")
+    async def missed_30d(interaction: discord.Interaction):
+        remember_command_channel(bot, interaction)
+        await interaction.response.defer(thinking=True)
+        guild_id = guild_id_for_interaction(interaction)
+        clan_tag = await resolve_clan_tag(bot, guild_id)
+
+        if clan_tag is None:
+            await interaction.followup.send(no_clan_configured_message())
+            return
+
+        await interaction.followup.send(
+            await asyncio.to_thread(build_missed_30d_response, clan_tag)
+        )
 
     @bot.tree.command(name="latest-war-recap", description="Show the latest completed regular war recap.")
     async def latest_war_recap(interaction: discord.Interaction):
