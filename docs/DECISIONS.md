@@ -116,6 +116,19 @@ Tradeoffs:
 
 - WAL adds `-wal`/`-shm` sidecar files that backups must account for.
 
+## Decision: Rank recap MVP by impact, not by name
+
+Reason:
+
+- Top attackers routinely tie at maximum stars and full destruction, so the previous tiebreak on `name.lower()` handed the MVP to the alphabetically first player every war (confirmed across 12 real wars, each with a 6-17 player tie at 6 stars).
+- Weighting stars by target difficulty (the opponent's `mapPosition`) rewards three-starring the toughest bases, which discriminates among otherwise-tied perfect attackers.
+- A war-seeded deterministic tiebreak (`sha256` of the war key plus player tag) resolves genuine ties without always favoring the same name, while keeping each war's recap reproducible.
+
+Tradeoffs:
+
+- The ranking is less obvious to read than "most stars"; the recap still shows each player's star total.
+- Difficulty depends on the opponent `mapPosition` being present in the snapshot; when it is missing, difficulty contributes zero and the seeded tiebreak still applies.
+
 ## Decision: Keep ClashCommand a single-clan tool
 
 Reason:

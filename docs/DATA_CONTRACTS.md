@@ -97,6 +97,8 @@ attack.stars
 
 `schedule_cwl_snapshot.py` uses CWL league group `state`, `season`, and `rounds[].warTags`, then saves raw CWL war responses with an added `_cwl` metadata object containing `warTag`, `season`, `round`, and `capturedAt`.
 
+`clashcommand/performance.py` (recap MVP / top-performer ranking) uses each attack's `stars`, `destructionPercentage`, and `defenderTag`, and the opponent members' `tag` and `mapPosition` (to weight target difficulty). When `mapPosition` is absent, difficulty contributes zero. Player identity for the reproducible tiebreak comes from the member `tag`.
+
 ## SQLite Database
 
 The Discord bot uses a SQLite database (`data/clashcommand.sqlite3`, or `CLASHCOMMAND_DB_PATH`) in WAL mode. Tables:
