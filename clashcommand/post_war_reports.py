@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from clashcommand.clash.war import current_war_overview, member_attacks, stable_war_key
+from clashcommand.clash.war import current_war_overview, stable_war_key
+from clashcommand.performance import member_performance, rank_performers
 
 
 LOGGER = logging.getLogger("clashcommand.post_war_reports")
@@ -136,46 +137,14 @@ def war_result_label(overview):
 
 
 def player_attack_stats(war):
-    players = []
-    for member in war.get("clan", {}).get("members", []) or []:
-        attacks = member_attacks(member)
-        stars = sum(attack.get("stars", 0) for attack in attacks if isinstance(attack, dict))
-        destruction_values = [
-            float(attack["destructionPercentage"])
-            for attack in attacks
-            if isinstance(attack, dict) and isinstance(attack.get("destructionPercentage"), (int, float))
-        ]
-        avg_destruction = (
-            sum(destruction_values) / len(destruction_values)
-            if destruction_values
-            else None
-        )
-        players.append(
-            {
-                "name": text_or_default(member.get("name")),
-                "attacks": len(attacks),
-                "stars": stars,
-                "avg_destruction": avg_destruction,
-                "perfect_attacks": sum(
-                    1
-                    for attack in attacks
-                    if isinstance(attack, dict) and attack.get("stars") == 3
-                ),
-            }
-        )
-    return players
+    return member_performance(
+        war.get("clan", {}).get("members", []) or [],
+        war.get("opponent", {}).get("members", []) or [],
+    )
 
 
 def top_performers(war, limit=3):
-    players = [player for player in player_attack_stats(war) if player["attacks"] > 0]
-    players.sort(
-        key=lambda player: (
-            -player["stars"],
-            -(player["avg_destruction"] or 0),
-            player["name"].lower(),
-        )
-    )
-    return players[:limit]
+    return rank_performers(player_attack_stats(war), seed=stable_war_key(war), limit=limit)
 
 
 def perfect_attackers(war, limit=5):

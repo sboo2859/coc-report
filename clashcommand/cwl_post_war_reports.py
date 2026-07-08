@@ -14,6 +14,7 @@ from clashcommand.clash.cwl import (
     cwl_participates,
     cwl_war_key,
 )
+from clashcommand.performance import member_performance, rank_performers
 
 
 LOGGER = logging.getLogger("clashcommand.cwl_post_war_reports")
@@ -125,53 +126,15 @@ def cwl_result_label(our_side, opponent):
     return "Tie"
 
 
-def cwl_member_stats(our_side):
-    players = []
-    members = our_side.get("members", [])
-    if not isinstance(members, list):
-        members = []
-
-    for member in members:
-        attacks = member.get("attacks", [])
-        if not isinstance(attacks, list):
-            attacks = []
-        stars = sum(attack.get("stars", 0) for attack in attacks if isinstance(attack, dict))
-        destruction_values = [
-            float(attack["destructionPercentage"])
-            for attack in attacks
-            if isinstance(attack, dict) and isinstance(attack.get("destructionPercentage"), (int, float))
-        ]
-        avg_destruction = (
-            sum(destruction_values) / len(destruction_values)
-            if destruction_values
-            else None
-        )
-        players.append(
-            {
-                "name": text_or_default(member.get("name")),
-                "attacks": len(attacks),
-                "stars": stars,
-                "avg_destruction": avg_destruction,
-                "perfect_attacks": sum(
-                    1
-                    for attack in attacks
-                    if isinstance(attack, dict) and attack.get("stars") == 3
-                ),
-            }
-        )
-    return players
-
-
-def cwl_top_performers(our_side, limit=3):
-    players = [player for player in cwl_member_stats(our_side) if player["attacks"] > 0]
-    players.sort(
-        key=lambda player: (
-            -player["stars"],
-            -(player["avg_destruction"] or 0),
-            player["name"].lower(),
-        )
+def cwl_member_stats(our_side, opponent):
+    return member_performance(
+        our_side.get("members", []) or [],
+        (opponent or {}).get("members", []) or [],
     )
-    return players[:limit]
+
+
+def cwl_top_performers(our_side, opponent, seed, limit=3):
+    return rank_performers(cwl_member_stats(our_side, opponent), seed=seed, limit=limit)
 
 
 def build_cwl_post_war_report(war, clan_tag, website_url=None):
@@ -227,7 +190,7 @@ def build_cwl_post_war_report(war, clan_tag, website_url=None):
     else:
         lines.extend(["", "No missed attacks."])
 
-    performers = cwl_top_performers(our_side)
+    performers = cwl_top_performers(our_side, opponent, cwl_war_key(war))
     if performers:
         lines.extend(["", "**Top performers:**"])
         for player in performers:
