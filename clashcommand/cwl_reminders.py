@@ -74,6 +74,9 @@ class CwlReminderScheduler:
         self.interval_seconds = interval_seconds
         self.scheduler = None
         self.sent_reminders = set()
+        # clan_tag -> the war tag of the clan's current inWar round, cached so
+        # steady-state checks fetch one war instead of walking the whole group.
+        self._active_war_tag_by_clan = {}
 
     def start(self):
         if self.scheduler and self.scheduler.running:
@@ -98,9 +101,14 @@ class CwlReminderScheduler:
 
     async def check_current_cwl_war(self):
         LOGGER.info("CWL reminder check started.")
-        saved_channels = await asyncio.to_thread(
-            self.bot.linked_player_store.reminder_channels
+        settings_map = await asyncio.to_thread(
+            self.bot.linked_player_store.guild_settings_map
         )
+        saved_channels = {
+            guild_id: settings["channel_id"]
+            for guild_id, settings in settings_map.items()
+            if settings.get("channel_id")
+        }
         channel_by_guild = dict(self.bot.command_channels)
         channel_by_guild.update(saved_channels)
 
@@ -115,7 +123,7 @@ class CwlReminderScheduler:
             return
 
         for guild_id, channel_id in list(channel_by_guild.items()):
-            clan_tag = await self.clan_tag_for_guild(guild_id)
+            clan_tag = self.clan_tag_from_settings(guild_id, settings_map)
             if not clan_tag:
                 LOGGER.info(
                     "CWL reminder evaluation skipped: guild_id=%s reason=%s",
@@ -225,30 +233,53 @@ class CwlReminderScheduler:
         """Return the clan's current inWar CWL round war, or None.
 
         CWL rounds are staggered so a clan has at most one inWar round war at a
-        time; this fetches the league group and scans round war tags for it.
+        time. Steady state costs one API call: the resolved inWar war tag is
+        cached per clan and re-validated each cycle. A full league-group scan
+        (group fetch + round war-tag walk) only runs when there is no cached tag
+        or the cached round is no longer inWar (i.e. a new round started).
         """
+        cached_tag = self._active_war_tag_by_clan.get(clan_tag)
+        if cached_tag:
+            try:
+                war = self.bot.clash_client.get_cwl_war(cached_tag)
+            except ClashApiError as exc:
+                LOGGER.warning("Could not fetch cached CWL war %s: %s", cached_tag, exc)
+                war = None
+            if war and cwl_participates(war, clan_tag) and war.get("state") == "inWar":
+                return war
+            self._active_war_tag_by_clan.pop(clan_tag, None)
+
+        return self._scan_for_active_cwl_war(clan_tag)
+
+    def _scan_for_active_cwl_war(self, clan_tag):
         group = self.bot.clash_client.get_cwl_league_group(clan_tag)
         if not group or group.get("state") == "notInWar":
             return None
 
-        for _round_index, war_tag in cwl_group_war_tags(group):
-            try:
-                war = self.bot.clash_client.get_cwl_war(war_tag)
-            except ClashApiError as exc:
-                LOGGER.warning("Could not fetch CWL war %s: %s", war_tag, exc)
-                continue
-            if not cwl_participates(war, clan_tag):
-                continue
-            if war.get("state") == "inWar":
-                return war
+        rounds = {}
+        for round_index, war_tag in cwl_group_war_tags(group):
+            rounds.setdefault(round_index, []).append(war_tag)
+
+        for round_index in sorted(rounds):
+            for war_tag in rounds[round_index]:
+                try:
+                    war = self.bot.clash_client.get_cwl_war(war_tag)
+                except ClashApiError as exc:
+                    LOGGER.warning("Could not fetch CWL war %s: %s", war_tag, exc)
+                    continue
+                if not cwl_participates(war, clan_tag):
+                    continue
+                # Our clan is in exactly one war per round; only the inWar round
+                # is relevant, so stop scanning this round once ours is found.
+                if war.get("state") == "inWar":
+                    self._active_war_tag_by_clan[clan_tag] = war_tag
+                    return war
+                break
         return None
 
-    async def clan_tag_for_guild(self, guild_id):
-        stored_clan_tag = await asyncio.to_thread(
-            self.bot.linked_player_store.get_clan_tag,
-            guild_id,
-        )
-        stored_clan_tag = normalize_clan_tag(stored_clan_tag)
+    def clan_tag_from_settings(self, guild_id, settings_map):
+        settings = settings_map.get(guild_id) or {}
+        stored_clan_tag = normalize_clan_tag(settings.get("clan_tag"))
         if stored_clan_tag:
             return stored_clan_tag
 

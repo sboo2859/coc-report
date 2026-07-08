@@ -15,6 +15,10 @@ DEFAULT_BUFFER_MINUTES = 2
 DEFAULT_PREP_POLL_MINUTES = 30
 DEFAULT_IDLE_POLL_MINUTES = 60
 DEFAULT_ENDED_POLL_MINUTES = 30
+# During preparation the only event we need to catch is battle-day start, so we
+# sleep until startTime instead of polling every prep_poll_minutes. Capped so a
+# very long prep still re-verifies periodically (in case the war is cancelled).
+DEFAULT_PREP_MAX_SLEEP_MINUTES = 360
 
 
 def log(message):
@@ -346,9 +350,47 @@ def handle_in_war(data, saved_wars, buffer_minutes, fallback_minutes):
     save_final_snapshot(final_data, saved_wars, scheduled_war=scheduled_war)
 
 
+def handle_preparation(data, fallback_minutes, max_sleep_minutes):
+    start_time_text = data.get("startTime")
+    start_time = None
+    if start_time_text:
+        try:
+            start_time = parse_coc_time(start_time_text)
+        except ValueError:
+            start_time = None
+
+    if start_time is None:
+        log(
+            "Current war state: preparation, but startTime is unavailable; "
+            f"checking again in {fallback_minutes:g} minutes."
+        )
+        sleep_minutes(fallback_minutes)
+        return
+
+    now = datetime.now(timezone.utc)
+    seconds_until_start = (start_time - now).total_seconds()
+    if seconds_until_start <= 0:
+        log(
+            "Current war state: preparation, but battle day should have started; "
+            f"checking again in {fallback_minutes:g} minutes."
+        )
+        sleep_minutes(fallback_minutes)
+        return
+
+    sleep_seconds = min(seconds_until_start, max_sleep_minutes * 60)
+    log(
+        f"Current war state: preparation; battle day starts at {format_datetime(start_time)}; "
+        f"sleeping for {format_duration(sleep_seconds)}."
+    )
+    time.sleep(sleep_seconds)
+
+
 def run_scheduler():
     buffer_minutes = env_minutes("WAR_END_BUFFER_MINUTES", DEFAULT_BUFFER_MINUTES)
     prep_poll_minutes = env_minutes("WAR_PREP_POLL_MINUTES", DEFAULT_PREP_POLL_MINUTES)
+    prep_max_sleep_minutes = env_minutes(
+        "WAR_PREP_MAX_SLEEP_MINUTES", DEFAULT_PREP_MAX_SLEEP_MINUTES
+    )
     idle_poll_minutes = env_minutes("WAR_IDLE_POLL_MINUTES", DEFAULT_IDLE_POLL_MINUTES)
     ended_poll_minutes = env_minutes("WAR_ENDED_POLL_MINUTES", DEFAULT_ENDED_POLL_MINUTES)
     saved_wars = load_saved_wars()
@@ -371,11 +413,17 @@ def run_scheduler():
             handle_in_war(data, saved_wars, buffer_minutes, prep_poll_minutes)
         elif state == "warEnded":
             log("Current war state: warEnded")
-            save_final_snapshot(data, saved_wars)
-            sleep_minutes(ended_poll_minutes)
+            saved = save_final_snapshot(data, saved_wars)
+            if saved:
+                sleep_minutes(ended_poll_minutes)
+            else:
+                log(
+                    "Final snapshot already saved for this war; backing off to "
+                    f"{idle_poll_minutes:g} minutes until the next war."
+                )
+                sleep_minutes(idle_poll_minutes)
         elif state == "preparation":
-            log(f"Current war state: preparation; checking again in {prep_poll_minutes:g} minutes.")
-            sleep_minutes(prep_poll_minutes)
+            handle_preparation(data, prep_poll_minutes, prep_max_sleep_minutes)
         elif state == "notInWar":
             log(f"No active war; checking again in {idle_poll_minutes:g} minutes.")
             sleep_minutes(idle_poll_minutes)

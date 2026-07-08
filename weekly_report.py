@@ -473,9 +473,10 @@ def log_roster_field_summary(label, totals):
     )
 
 
-def generate_weekly_report_data(days=None, data_dir=DEFAULT_WAR_RESULTS_DIR):
+def generate_weekly_report_data(days=None, data_dir=DEFAULT_WAR_RESULTS_DIR, loaded_wars=None):
     report_days = days if days and days > 0 else env_int("REPORT_DAYS", DEFAULT_REPORT_DAYS)
-    loaded_wars = load_war_files(data_dir)
+    if loaded_wars is None:
+        loaded_wars = load_war_files(data_dir)
     recent_wars = filter_recent_wars(loaded_wars, report_days)
     totals = aggregate_wars(recent_wars)
     summary = report_summary(totals)
@@ -491,8 +492,9 @@ def generate_weekly_report_data(days=None, data_dir=DEFAULT_WAR_RESULTS_DIR):
     }
 
 
-def generate_history_report_data(data_dir=DEFAULT_WAR_RESULTS_DIR):
-    loaded_wars = load_war_files(data_dir)
+def generate_history_report_data(data_dir=DEFAULT_WAR_RESULTS_DIR, loaded_wars=None):
+    if loaded_wars is None:
+        loaded_wars = load_war_files(data_dir)
     history_wars = dedupe_wars(loaded_wars)
     totals = aggregate_wars(history_wars)
     summary = report_summary(totals)
