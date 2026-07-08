@@ -41,12 +41,12 @@ The default buffer is 2 minutes. The buffer exists to avoid fetching at the exac
 For `warEnded`:
 
 1. Save immediately if this war has not already been saved.
-2. Sleep for `WAR_ENDED_POLL_MINUTES`.
+2. If a snapshot was just saved, sleep for `WAR_ENDED_POLL_MINUTES`. If the war was already saved, back off and sleep for `WAR_IDLE_POLL_MINUTES` (nothing more to capture until the next war).
 
 For `preparation`:
 
 1. Do not save a result snapshot.
-2. Sleep for `WAR_PREP_POLL_MINUTES`.
+2. Sleep until battle-day `startTime`, capped at `WAR_PREP_MAX_SLEEP_MINUTES` (default 360). If `startTime` is missing or already passed, fall back to sleeping `WAR_PREP_POLL_MINUTES`.
 
 For `notInWar` or unknown states:
 
@@ -71,7 +71,7 @@ The CWL scheduler loops until stopped. Each loop:
 4. Calls `/clanwarleagues/wars/{warTag}` for each unsaved war tag.
 5. Saves only wars where `state == "warEnded"`.
 6. Tracks saved war tags in `data/state/saved_cwl_wars.json`.
-7. Sleeps for `CWL_POLL_MINUTES`, defaulting to 30 minutes.
+7. Sleeps for `CWL_POLL_MINUTES` (default 30) while the league group is active, or `CWL_IDLE_POLL_MINUTES` (default 360) when the group is `notInWar` or `ended`. A fetch failure uses the normal `CWL_POLL_MINUTES` so it retries promptly.
 
 CWL snapshots are written to:
 

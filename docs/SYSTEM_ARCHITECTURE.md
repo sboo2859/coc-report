@@ -43,9 +43,9 @@ The duplicate `coc-report-deploy.timer` path was disabled on the Droplet. Keep o
 
 `fetch_war.py` is the shared API layer and manual fetch command. It supports `COC_API_TOKEN`/`COC_CLAN_TAG` and `CLASH_API_TOKEN`/`CLAN_TAG`, fetches `currentwar`, prints attack participation, saves manual snapshots to `data/wars/`, and writes the latest current-war snapshot to `data/current_war/latest_current_war.json`.
 
-`schedule_war_snapshot.py` is the long-running scheduler. It reuses `fetch_war.py`, watches the current war state, persists scheduled war identity before sleeping to war end, waits until `endTime` plus a buffer, and saves final snapshots to `data/war_results/`. Once a scheduled final capture exists, the scheduled war key is authoritative; live data is accepted only when it matches that key.
+`schedule_war_snapshot.py` is the long-running scheduler. It reuses `fetch_war.py`, watches the current war state, persists scheduled war identity before sleeping to war end, waits until `endTime` plus a buffer, and saves final snapshots to `data/war_results/`. Once a scheduled final capture exists, the scheduled war key is authoritative; live data is accepted only when it matches that key. To avoid needless API polling, during `preparation` it sleeps until battle-day `startTime` (capped at `WAR_PREP_MAX_SLEEP_MINUTES`) rather than polling every prep interval, and it backs off to the idle interval once a `warEnded` snapshot is already saved.
 
-`schedule_cwl_snapshot.py` is the separate long-running CWL scheduler. It fetches the current CWL league group, iterates round war tags, fetches each CWL war by tag, and saves ended CWL wars to `data/cwl_war_results/`.
+`schedule_cwl_snapshot.py` is the separate long-running CWL scheduler. It fetches the current CWL league group, iterates round war tags, fetches each CWL war by tag, and saves ended CWL wars to `data/cwl_war_results/`. It polls every `CWL_POLL_MINUTES` while rounds are active and backs off to `CWL_IDLE_POLL_MINUTES` when the league group is `notInWar` or `ended`, since CWL runs only about one week per month.
 
 `clashcommand/bot.py` registers Discord slash commands. Regular war commands use `/war` and `/missed`. CWL commands use `/cwl`, `/cwl-war`, and `/cwl-missed`, fetching CWL data live from the Clash API. CWL recap posting and reminders run in separate schedulers (`cwl_post_war_reports.py`, `cwl_reminders.py`) and do not change regular war reminder behavior.
 
@@ -65,7 +65,7 @@ The duplicate `coc-report-deploy.timer` path was disabled on the Droplet. Keep o
 
 `fetch_current_war_snapshot.py` refreshes `data/current_war/latest_current_war.json` from the Clash API for current-war site generation.
 
-`build_site.py` generates static HTML under `site_output/` for Cloudflare Pages. By default it writes the weekly report and total history pages. With `--include-current-war`, it writes a static current-war dashboard. With `--live-current-war-fallback`, it fetches the live Clash API current war first, saves `data/current_war/latest_current_war.json`, then renders `site_output/current-war.html`; if the live fetch fails, it falls back to the cached snapshot. The build also writes `site_output/_headers` so Cloudflare Pages sends no-cache headers for `/current-war.html`.
+`build_site.py` generates static HTML under `site_output/` for Cloudflare Pages. It loads the saved war snapshots from `data/war_results/` once per build and derives both the weekly and total-history pages from that in-memory list. By default it writes the weekly report and total history pages. With `--include-current-war`, it writes a static current-war dashboard. With `--live-current-war-fallback`, it fetches the live Clash API current war first, saves `data/current_war/latest_current_war.json`, then renders `site_output/current-war.html`; if the live fetch fails, it falls back to the cached snapshot. The build also writes `site_output/_headers` so Cloudflare Pages sends no-cache headers for `/current-war.html`.
 
 `deploy.sh` is the one-time local deploy command. It rebuilds the full static site with current-war data, stages only `site_output/`, commits if generated output changed, and pushes normally to GitHub.
 
@@ -208,6 +208,11 @@ Displayed site timestamps are formatted in Central Time using `ZoneInfo("America
 - Preserve one-command scripts so each workflow can be run independently.
 - Make long-running behavior safe: log clearly, retry after temporary failures, and dedupe final saves.
 - Keep leader-facing output clean and copy/paste-ready.
+- Poll the Clash API only as often as the next relevant event requires; back off during idle, preparation, and off-season windows.
+
+## Scope
+
+ClashCommand is intentionally a **single-clan tool** for one clan's Discord server. It supports one clan per guild and is not built out for multi-tenant/multi-server distribution or paid tiers. This keeps the design simple (SQLite, a single Droplet, per-guild settings) and matches the decision not to pursue commercialization — which Supercell's Fan Content Policy would also restrict. The `guild_settings` table is keyed per guild, so the code is not hostile to multiple servers, but multi-server operation, isolation hardening, and monetization are explicitly out of scope.
 
 ## Key Decisions
 
@@ -257,4 +262,4 @@ data/state/saved_cwl_wars.json
 data/wars/
 ```
 
-The SQLite DB stores linked Discord players, guild reminder channels, guild clan tags, reminder sends, and post-war recap dedupe events. The next operational improvement is a runtime-state backup script plus systemd timer that exports canonical state and the SQLite DB to an off-Droplet target, preferably Cloudflare R2.
+The SQLite DB stores linked Discord players, guild reminder channels, guild clan tags, reminder sends, and post-war recap dedupe events. The bot's `LinkedPlayerStore` keeps a single WAL-mode connection (opened with `check_same_thread=False` and serialized by a lock) rather than reconnecting per call, since all DB access runs through `asyncio.to_thread`. WAL mode leaves `clashcommand.sqlite3-wal`/`-shm` sidecar files, which a backup must checkpoint or copy alongside the DB. The next operational improvement is a runtime-state backup script plus systemd timer that exports canonical state and the SQLite DB to an off-Droplet target, preferably Cloudflare R2.

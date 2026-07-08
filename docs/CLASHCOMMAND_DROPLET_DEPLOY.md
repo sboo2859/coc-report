@@ -6,6 +6,8 @@ This guide runs the repo-based ClashCommand Discord bot on a DigitalOcean Ubuntu
 python -m clashcommand.bot
 ```
 
+> **Production layout note (2026-07):** The live droplet (`ClashCommand`) runs the repo at `/opt/clashcommand/app` with its virtualenv one level up at `/opt/clashcommand/.venv`. The active service therefore uses `ExecStart=/opt/clashcommand/.venv/bin/python -m clashcommand.bot`. The example paths below (`/opt/clashcommand/app/.venv`) describe a self-contained alternative; match whichever layout the running `clashcommand.service` uses. The bot, `coc-war-snapshot`, and `coc-cwl-snapshot` services all run from this checkout, and `coc-report-updater.timer` rebuilds the static site every 15 minutes.
+
 ## Assumptions
 
 - The Discord app and bot already exist.

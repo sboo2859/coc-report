@@ -106,10 +106,15 @@ Scheduler:
 ```text
 WAR_END_BUFFER_MINUTES=2
 WAR_PREP_POLL_MINUTES=30
+WAR_PREP_MAX_SLEEP_MINUTES=360
 WAR_IDLE_POLL_MINUTES=60
 WAR_ENDED_POLL_MINUTES=30
 WAR_RESULTS_DIR=data/war_results
+CWL_POLL_MINUTES=30
+CWL_IDLE_POLL_MINUTES=360
 ```
+
+During `preparation` the war scheduler sleeps until battle-day `startTime` (capped at `WAR_PREP_MAX_SLEEP_MINUTES`), and backs off to `WAR_IDLE_POLL_MINUTES` once a `warEnded` snapshot is saved. The CWL scheduler polls every `CWL_IDLE_POLL_MINUTES` when the league group is `notInWar` or `ended`, otherwise every `CWL_POLL_MINUTES`.
 
 Warning message:
 
