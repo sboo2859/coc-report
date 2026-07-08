@@ -80,6 +80,7 @@ Expected:
 - `coc-report-deploy.timer` should not be enabled if `coc-report-updater.timer` is active.
 - `data/war_results/` should gain `final_war_*.json` files after wars end.
 - `data/cwl_war_results/` should gain `cwl_war_*.json` files after CWL wars end.
+- `site_output/_headers` should exist and include no-cache headers for `/current-war.html`.
 
 ## Environment Variables
 
@@ -107,9 +108,8 @@ Current war snapshots:
 
 ```text
 Clash API
-  -> fetch_war.py / fetch_current_war_snapshot.py
+  -> build_site.py --include-current-war --live-current-war-fallback
   -> data/current_war/latest_current_war.json
-  -> build_site.py --include-current-war
   -> site_output/current-war.html
 ```
 
@@ -121,6 +121,15 @@ Clash API
   -> data/war_results/final_war_*.json
   -> weekly_report.py / build_site.py
   -> site_output/index.html and site_output/history.html
+```
+
+Discord post-war recaps:
+
+```text
+schedule_war_snapshot.py
+  -> data/war_results/final_war_*.json
+  -> post_war_reports.py scan loop
+  -> Discord recap post
 ```
 
 CWL war snapshots:
@@ -137,6 +146,8 @@ Deployment:
 
 ```text
 update_coc_report.sh
+  -> git fetch origin
+  -> fast-forward only if clean and behind origin/main
   -> python3 build_site.py --include-current-war --live-current-war-fallback
   -> git add site_output
   -> git commit + push if changed
@@ -202,19 +213,25 @@ In this repo, `build_site.py --include-current-war` prefers:
 data/current_war/latest_current_war.json
 ```
 
-Use this command to refresh that snapshot from the Clash API:
+Use this command to refresh that snapshot from the Clash API manually:
 
 ```bash
 python3 fetch_current_war_snapshot.py
 ```
 
-Then rebuild:
+For production, use live-first build behavior:
 
 ```bash
 python3 build_site.py --include-current-war --live-current-war-fallback
 ```
 
-`update_coc_report.sh` must use `--live-current-war-fallback` on the Droplet. That lets the updater use `data/current_war/latest_current_war.json` when present, or fetch the live current war from the Clash API when the snapshot is missing. The Droplet IP is allowlisted, so this fallback is expected to work there.
+With `--live-current-war-fallback`, `build_site.py` fetches the live current war first, saves `data/current_war/latest_current_war.json`, then renders `site_output/current-war.html`. If the live fetch fails, it falls back to the saved snapshot when present.
+
+`site_output/_headers` gives `/current-war.html` this Cloudflare Pages header:
+
+```text
+Cache-Control: no-cache, no-store, must-revalidate
+```
 
 ```bash
 sed -n '1,120p' update_coc_report.sh
@@ -265,15 +282,39 @@ Useful command checks in Discord:
 /cwl-missed
 ```
 
-`/latest-war-recap` manually shows the latest completed regular-war recap without changing post-war-report dedupe. The CWL commands are read-only. They do not schedule CWL reminders and do not change regular war reminders.
+`/latest-war-recap` manually shows the latest completed regular-war recap without changing post-war-report dedupe. The CWL visibility commands (`/cwl`, `/cwl-war`, `/cwl-missed`) show live CWL state on demand; automatic CWL recaps and reminders run in separate schedulers and do not change regular war reminders.
+
+Automatic war reminders:
+
+- Reminder checks log skip reasons at INFO/WARNING level.
+- Common skip reasons include no configured reminder channel, no clan configured, war is not `inWar`, no parseable end time, no stable war key, or reminder already sent.
+- Use `/set-channel` to configure the channel used by both war reminders and post-war recaps.
 
 Automatic post-war reports:
 
 - The bot scans `data/war_results/final_war_*.json` every five minutes.
 - Existing snapshots are marked seen at bot startup to avoid posting old wars after deploy.
 - New completed regular wars are posted to the configured reminder channel.
+- Channel selection uses the existing configured reminder channel; a recently used command channel can act as fallback while the bot is running.
 - Dedupe uses SQLite `reminder_events` with reminder type `post_war_report`.
+- New snapshots are marked seen only after a successful Discord send or a known prior SQLite `post_war_report` event.
+- If no recap channel exists, channel resolution fails, or Discord send fails, the war is not marked seen and the bot retries on a later scan.
 - If `REPORT_SITE_URL` is set in the bot environment, the recap includes that link.
+
+Automatic CWL round recaps:
+
+- The bot scans `data/cwl_war_results/cwl_war_*.json` every five minutes.
+- Existing snapshots are marked seen at bot startup, so deploying mid-season does not backfill already-ended rounds.
+- A snapshot is posted to a guild only when that guild's clan participated in the war; CWL snapshots include every ended war in the league group, so non-participant wars are skipped.
+- Dedupe uses SQLite `reminder_events` with reminder type `cwl_post_war_report`, keyed on the CWL war tag.
+- Retry and channel-fallback behavior matches regular recaps: a war is marked seen only after a successful send or a known prior SQLite event.
+
+Automatic CWL reminders:
+
+- The bot polls the live CWL league group and selects the clan's active `inWar` round war.
+- It reuses the regular 3-hour and 1-hour reminder windows and decision logic.
+- CWL reminder events are namespaced (`cwl_3h`, `cwl_1h`) so they never collide with regular-war reminders; linked players are mentioned by player tag.
+- Skip reasons (no configured channel, no clan, no active `inWar` round, no parseable end time, already sent) are logged at INFO/WARNING level.
 - CWL files are not included.
 
 Service file:
@@ -300,8 +341,11 @@ Role:
 
 - Runs `schedule_war_snapshot.py` continuously.
 - Watches the active war.
+- Persists scheduled war identity to `data/state/scheduled_war.json` before sleeping to war end.
 - Sleeps until war end plus buffer.
 - Saves completed `final_war_*.json` files to `data/war_results/`.
+- Treats the scheduled war key as authoritative for due final captures.
+- Rejects live next-war payloads when completing a prior scheduled war.
 
 The repo includes a service template:
 
@@ -371,6 +415,9 @@ Expected script behavior:
 
 ```text
 update_coc_report.sh
+  -> git fetch origin
+  -> refuse dirty-behind, locally-ahead, or divergent git state
+  -> fast-forward only when clean and behind origin/main
   -> python3 build_site.py --include-current-war --live-current-war-fallback
   -> git add site_output
   -> commit/push if changed
@@ -398,6 +445,51 @@ sudo systemctl disable --now coc-report-deploy.timer
 ```
 
 Use `coc-report-updater.timer` as the active production updater unless you intentionally replace it.
+
+The updater intentionally does not auto-rebase. A blind rebase or merge is unsafe for an unattended timer that also creates local generated-site commits.
+
+## Runtime State And Backups
+
+Runtime data is ignored by Git. Do not rely on Git alone for recovery.
+
+Canonical state:
+
+```text
+data/war_results/final_war_*.json
+data/cwl_war_results/cwl_war_*.json
+data/clashcommand.sqlite3, or CLASHCOMMAND_DB_PATH
+```
+
+Critical temporary state:
+
+```text
+data/state/scheduled_war.json
+```
+
+Cache/regenerable state:
+
+```text
+data/current_war/latest_current_war.json
+data/state/saved_wars.json
+data/state/saved_cwl_wars.json
+data/wars/
+```
+
+SQLite contents:
+
+```text
+linked_players     Discord user to CoC player mappings
+guild_settings     reminder channel and clan tag per guild
+reminder_events    war reminders and post-war recap dedupe
+```
+
+Next operational TODO:
+
+- Add `scripts/backup_runtime_state.sh`.
+- Add `coc-runtime-backup.service` and `coc-runtime-backup.timer`.
+- Back up `data/war_results/`, `data/cwl_war_results/`, `data/state/`, and the SQLite DB.
+- Upload backup archives off-Droplet, preferably to Cloudflare R2.
+- Document restore steps after the backup script exists.
 
 ## Common Commands
 
@@ -482,6 +574,36 @@ journalctl -u coc-report-updater -n 100 --no-pager
 sudo systemctl start coc-report-updater.service
 ```
 
+### Post-War Recap Did Not Post
+
+Check that a final regular-war snapshot exists:
+
+```bash
+ls -l data/war_results
+find data/war_results -maxdepth 1 -type f -name 'final_war_*.json' | sort | tail
+```
+
+Check the bot and logs:
+
+```bash
+systemctl status clashcommand
+journalctl -u clashcommand -n 150 --no-pager
+```
+
+Manually verify the formatter in Discord:
+
+```text
+/latest-war-recap
+```
+
+Notes:
+
+- Old snapshots are marked seen when the bot starts, so restarting the bot should not post historical wars.
+- Automatic recaps require a known channel. Use `/set-channel` if needed.
+- Sent recaps are deduped in SQLite `reminder_events` with reminder type `post_war_report`.
+- New snapshots should remain retryable if no message was actually sent. Check logs for `Post-war recap not marked seen`.
+- CWL snapshots are intentionally ignored.
+
 ### Current War Page Shows Fallback
 
 Run:
@@ -499,6 +621,8 @@ grep -n "Current war data unavailable" site_output/current-war.html
 ```
 
 If fetch fails with invalid IP, confirm you are on the Droplet.
+
+If the page still appears stale after a successful updater run, confirm Cloudflare Pages deployed the latest Git commit and inspect `site_output/_headers` for the `/current-war.html` no-cache rule.
 
 ### Bot Not Responding
 
@@ -523,13 +647,16 @@ git status --short
 
 If the updater reports no changes, the rebuilt `site_output/` matched the committed output.
 
+If the updater exits before building, check for git safety errors. It refuses dirty-behind, locally-ahead, and divergent states instead of rebasing automatically.
+
 ## Known Gotchas
 
 - `data/war_results/` was empty before final snapshot automation; weekly and overall pages need this directory populated.
 - `data/wars/` and `data/war_results/` are different. Reports use `data/war_results/`.
 - Current war data and final war report data are separate paths.
+- `data/state/scheduled_war.json` is temporary but critical while a final snapshot is pending.
 - CWL snapshots are separate from regular war snapshots and are not used by public reports yet.
-- Automatic Discord post-war reports are regular-war only and read from `data/war_results/`.
+- Automatic Discord post-war reports cover both regular wars (`data/war_results/`) and CWL rounds (`data/cwl_war_results/`); CWL recaps and reminders run in their own schedulers inside the bot process.
 - The Droplet interactive shell does not automatically load `.env`.
 - `CLASH_API_TOKEN`/`CLAN_TAG` and `COC_API_TOKEN`/`COC_CLAN_TAG` naming still needs cleanup.
 - `coc-report-deploy.timer` is duplicate automation and was disabled on the Droplet.
@@ -543,10 +670,9 @@ TODO:
 
 - Standardize token names to `CLASH_API_TOKEN` and `CLAN_TAG` everywhere.
 - Remove or archive duplicate/obsolete deploy automation after confirming no one uses it.
-- Consider making the updater refresh `data/current_war/latest_current_war.json` before each build if it does not already.
-- Add CWL reminders after command behavior is stable:
-  - remind 3h before CWL war ends
-  - remind 1h before CWL war ends
-  - avoid duplicate reminder spam
-  - use separate reminder keys from regular wars
+- Implement runtime-state backups to an off-Droplet target, preferably Cloudflare R2.
 - Add clan activity/member snapshots later.
+
+Done:
+
+- CWL round recaps and CWL reminders (3h/1h) are automated in the bot process, with war-tag dedupe and reminder keys (`cwl_post_war_report`, `cwl_3h`, `cwl_1h`) kept separate from regular wars. Validate with `python3 scripts/validate_cwl_automation.py`.
