@@ -1,0 +1,32 @@
+{
+  "state": "warEnded",
+  "startTime": "20260704T120000.000Z",
+  "endTime": "20260705T120000.000Z",
+  "clan": {
+    "tag": "#ENEMY",
+    "name": "Rival Clan",
+    "stars": 14,
+    "destructionPercentage": 78.4,
+    "members": [
+      {"tag": "#E1", "name": "Enemy One", "townhallLevel": 15, "attacks": [{"stars": 2, "destructionPercentage": 61, "order": 3}]},
+      {"tag": "#E2", "name": "Enemy Two", "townhallLevel": 14, "attacks": []}
+    ]
+  },
+  "opponent": {
+    "tag": "#OURCLAN",
+    "name": "Our Clan",
+    "stars": 18,
+    "destructionPercentage": 92.1,
+    "members": [
+      {"tag": "#P1", "name": "Alpha", "townhallLevel": 15, "attacks": [{"stars": 3, "destructionPercentage": 100, "order": 1}]},
+      {"tag": "#P2", "name": "Bravo", "townhallLevel": 15, "attacks": [{"stars": 2, "destructionPercentage": 85, "order": 2}]},
+      {"tag": "#P3", "name": "Charlie", "townhallLevel": 14, "attacks": []}
+    ]
+  },
+  "_cwl": {
+    "warTag": "#WAR12345",
+    "season": "2026-07",
+    "round": 3,
+    "capturedAt": "2026-07-05T12:02:00Z"
+  }
+}

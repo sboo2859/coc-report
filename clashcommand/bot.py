@@ -9,6 +9,13 @@ from discord import app_commands
 from discord.ext import commands
 
 from clashcommand.clash.client import ClashApiError, ClashClient
+from clashcommand.clash.cwl import (
+    cwl_attacks_summary,
+    cwl_clan_entry,
+    cwl_group_war_tags,
+    cwl_opponent_side,
+    cwl_war_side,
+)
 from clashcommand.clash.time import format_central_time, parse_optional_coc_time
 from clashcommand.clash.war import (
     attacks_per_member,
@@ -32,6 +39,8 @@ from clashcommand.post_war_reports import (
     latest_war_snapshot,
     load_war_snapshots,
 )
+from clashcommand.cwl_post_war_reports import CwlPostWarReportScheduler
+from clashcommand.cwl_reminders import CwlReminderScheduler
 from clashcommand.reminders import WarReminderScheduler
 
 
@@ -296,93 +305,6 @@ def build_missed_30d_response(clan_tag, days=MISSED_30D_DAYS, limit=MISSED_30D_L
     return "\n".join(lines[:3 + max(0, limit // 2)] + ["List truncated to fit Discord."])
 
 
-def cwl_group_war_tags(group):
-    tags = []
-    rounds = group.get("rounds", [])
-    if not isinstance(rounds, list):
-        return tags
-
-    for round_index, round_data in enumerate(rounds, start=1):
-        war_tags = round_data.get("warTags", [])
-        if not isinstance(war_tags, list):
-            continue
-
-        for war_tag in war_tags:
-            if war_tag and war_tag != "#0":
-                tags.append((round_index, war_tag))
-
-    return tags
-
-
-def cwl_clan_entry(group, clan_tag):
-    normalized_tag = normalize_clan_tag(clan_tag)
-    clans = group.get("clans", [])
-    if not isinstance(clans, list):
-        return None
-
-    for clan in clans:
-        if normalize_clan_tag(clan.get("tag")) == normalized_tag:
-            return clan
-    return None
-
-
-def cwl_war_side(war, clan_tag):
-    normalized_tag = normalize_clan_tag(clan_tag)
-    for side_name in ("clan", "opponent"):
-        side = war.get(side_name, {})
-        if normalize_clan_tag(side.get("tag")) == normalized_tag:
-            return side_name, side
-    return None, None
-
-
-def cwl_opponent_side(war, clan_tag):
-    side_name, our_side = cwl_war_side(war, clan_tag)
-    if side_name == "clan":
-        return our_side, war.get("opponent", {})
-    if side_name == "opponent":
-        return our_side, war.get("clan", {})
-    return None, None
-
-
-def cwl_attacks_summary(war, clan_tag):
-    our_side, _opponent = cwl_opponent_side(war, clan_tag)
-    if not our_side:
-        return None
-
-    attacks_allowed = war.get("attacksPerMember", 1)
-    if not isinstance(attacks_allowed, int) or attacks_allowed <= 0:
-        attacks_allowed = 1
-
-    remaining_members = []
-    members = our_side.get("members", [])
-    if not isinstance(members, list):
-        members = []
-
-    for member in members:
-        attacks = member.get("attacks", [])
-        if not isinstance(attacks, list):
-            attacks = []
-        remaining = max(0, attacks_allowed - len(attacks))
-        if remaining:
-            remaining_members.append(
-                {
-                    "name": member.get("name") or "Unknown",
-                    "remaining": remaining,
-                }
-            )
-
-    remaining_members.sort(key=lambda player: (-player["remaining"], player["name"].lower()))
-    possible_attacks = len(members) * attacks_allowed
-    used_attacks = possible_attacks - sum(player["remaining"] for player in remaining_members)
-
-    return {
-        "attacks_allowed": attacks_allowed,
-        "used_attacks": used_attacks,
-        "possible_attacks": possible_attacks,
-        "remaining_members": remaining_members,
-    }
-
-
 def build_cwl_group_response(group, clan_tag):
     state = group.get("state", "unknown")
     season = group.get("season") or "Unavailable"
@@ -515,11 +437,15 @@ class ClashCommandBot(commands.Bot):
         self.command_channels = {}
         self.reminder_scheduler = WarReminderScheduler(self)
         self.post_war_report_scheduler = PostWarReportScheduler(self)
+        self.cwl_reminder_scheduler = CwlReminderScheduler(self)
+        self.cwl_post_war_report_scheduler = CwlPostWarReportScheduler(self)
 
     async def setup_hook(self):
         await asyncio.to_thread(self.linked_player_store.initialize)
         self.reminder_scheduler.start()
         self.post_war_report_scheduler.start()
+        self.cwl_reminder_scheduler.start()
+        self.cwl_post_war_report_scheduler.start()
 
         if self.settings.command_sync_mode in ("global", "both"):
             synced = await self.tree.sync()
@@ -552,6 +478,8 @@ class ClashCommandBot(commands.Bot):
     async def close(self):
         self.reminder_scheduler.shutdown()
         self.post_war_report_scheduler.shutdown()
+        self.cwl_reminder_scheduler.shutdown()
+        self.cwl_post_war_report_scheduler.shutdown()
         await super().close()
 
 

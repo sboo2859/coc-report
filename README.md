@@ -7,13 +7,14 @@ Production currently runs on the DigitalOcean Droplet `ClashCommand`:
 ```text
 clashcommand.service       -> Discord bot
 coc-war-snapshot.service  -> final war snapshots in data/war_results/
+coc-cwl-snapshot.service  -> CWL final snapshots in data/cwl_war_results/
 coc-report-updater.timer  -> rebuild/push site_output/ every 15 minutes
 Cloudflare Pages          -> serves committed static files
 ```
 
 For recovery and operator commands, start with [CoC Report Runbook](docs/RUNBOOK.md).
 
-Current Discord bot commands include regular war commands (`/war`, `/missed`, `/latest-war-recap`) and read-only CWL visibility commands (`/cwl`, `/cwl-war`, `/cwl-missed`). The bot can post automatic regular-war recaps from completed snapshots. CWL reminders are not automated yet.
+Current Discord bot commands include regular war commands (`/war`, `/missed`, `/latest-war-recap`) and CWL visibility commands (`/cwl`, `/cwl-war`, `/cwl-missed`). The bot posts automatic regular-war recaps from new `data/war_results/final_war_*.json` snapshots and automatic CWL round recaps from new `data/cwl_war_results/cwl_war_*.json` snapshots. It also sends automatic pre-end reminders for both regular wars and active CWL rounds (3-hour and 1-hour windows).
 
 ## Discord Bot Conversion
 
@@ -83,7 +84,7 @@ Run the scheduler:
 python3 schedule_war_snapshot.py
 ```
 
-The scheduler watches the `currentwar` response, waits until `endTime` plus a settlement buffer, then saves the final war snapshot. It also saves immediately when the current war is already in `warEnded` state.
+The scheduler watches the `currentwar` response, persists the scheduled war identity before sleeping, waits until `endTime` plus a settlement buffer, then saves the final war snapshot. Once a scheduled final capture exists, that scheduled identity is authoritative: a live `warEnded` payload is used only when its stable war key matches, `notInWar` falls back to the persisted scheduled payload, and next-war `preparation`/`inWar` payloads are rejected for the prior war. It also saves immediately when the current war is already in `warEnded` state.
 
 Final war snapshots are saved under `data/war_results/`.
 
@@ -195,19 +196,17 @@ site_output/history.html
 
 The weekly report uses the selected report window from saved final snapshots in `data/war_results/` and does not require API access. Total History uses all saved final snapshots in `data/war_results/`.
 
-In this checkout, `build_site.py --include-current-war` prefers `data/current_war/latest_current_war.json`. Refresh that file first with:
-
-```bash
-python3 fetch_current_war_snapshot.py
-```
-
-Or allow `build_site.py` to call the live API if the snapshot is missing:
+For production freshness, build with live current-war refresh enabled:
 
 ```bash
 python3 build_site.py --include-current-war --live-current-war-fallback
 ```
 
+With `--live-current-war-fallback`, `build_site.py` fetches the live Clash API current war first, writes `data/current_war/latest_current_war.json`, then renders `site_output/current-war.html`. If live fetch fails, it falls back to the latest saved current-war snapshot when present.
+
 If current-war data is unavailable, the build still writes `current-war.html` with an unavailable-data message.
+
+The build also writes `site_output/_headers` so Cloudflare Pages sends `Cache-Control: no-cache, no-store, must-revalidate` for `/current-war.html`.
 
 You can also generate only the weekly page directly from the report script:
 
@@ -266,7 +265,7 @@ kill <PID>
 
 The auto deploy loop should run on the PC where `COC_API_TOKEN` is permanently available. It rebuilds the static site, commits only `site_output/` when generated output changes, and lets Cloudflare Pages redeploy from the GitHub push.
 
-On the production Droplet, the active updater is `coc-report-updater.timer`, which runs `update_coc_report.sh` every 15 minutes. It should build with `--include-current-war --live-current-war-fallback` so the current-war page can use the Droplet's allowlisted IP when the local snapshot is missing. The older local loop is still useful for manual/local operation but is not the current production service.
+On the production Droplet, the active updater is `coc-report-updater.timer`, which runs `update_coc_report.sh` every 15 minutes. The updater fetches `origin/main`, fast-forwards only when the local branch is clean and behind, refuses dirty/divergent/locally-ahead states, builds with `--include-current-war --live-current-war-fallback`, commits `site_output/` when changed, and pushes normally. The older local loop is still useful for manual/local operation but is not the current production service.
 
 ### Cloudflare Pages setup
 
@@ -278,6 +277,37 @@ Use:
 - Production branch: `main`
 
 Cloudflare Pages will redeploy when GitHub receives a new push.
+
+`site_output/_headers` is committed with the generated site. It only disables caching for `/current-war.html`; `index.html` and `history.html` keep normal static-page caching.
+
+## Runtime State
+
+Runtime data is intentionally ignored by Git so the 15-minute updater does not commit noisy state.
+
+Canonical operational state:
+
+```text
+data/war_results/final_war_*.json
+data/cwl_war_results/cwl_war_*.json
+data/clashcommand.sqlite3, or CLASHCOMMAND_DB_PATH
+```
+
+Critical temporary state:
+
+```text
+data/state/scheduled_war.json
+```
+
+Cache/runtime convenience state:
+
+```text
+data/current_war/latest_current_war.json
+data/state/saved_wars.json
+data/state/saved_cwl_wars.json
+data/wars/
+```
+
+The SQLite DB stores linked players, guild reminder channel/clan settings, and reminder/post-war recap dedupe events. The next operational TODO is to add a runtime-state backup script plus systemd timer that exports canonical state and the SQLite DB to an off-Droplet target, preferably Cloudflare R2.
 
 ## Scheduler Settings
 

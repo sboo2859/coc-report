@@ -43,21 +43,29 @@ The duplicate `coc-report-deploy.timer` path was disabled on the Droplet. Keep o
 
 `fetch_war.py` is the shared API layer and manual fetch command. It supports `COC_API_TOKEN`/`COC_CLAN_TAG` and `CLASH_API_TOKEN`/`CLAN_TAG`, fetches `currentwar`, prints attack participation, saves manual snapshots to `data/wars/`, and writes the latest current-war snapshot to `data/current_war/latest_current_war.json`.
 
-`schedule_war_snapshot.py` is the long-running scheduler. It reuses `fetch_war.py`, watches the current war state, waits until `endTime` plus a buffer, and saves final snapshots to `data/war_results/`.
+`schedule_war_snapshot.py` is the long-running scheduler. It reuses `fetch_war.py`, watches the current war state, persists scheduled war identity before sleeping to war end, waits until `endTime` plus a buffer, and saves final snapshots to `data/war_results/`. Once a scheduled final capture exists, the scheduled war key is authoritative; live data is accepted only when it matches that key.
 
 `schedule_cwl_snapshot.py` is the separate long-running CWL scheduler. It fetches the current CWL league group, iterates round war tags, fetches each CWL war by tag, and saves ended CWL wars to `data/cwl_war_results/`.
 
-`clashcommand/bot.py` registers Discord slash commands. Regular war commands use `/war` and `/missed`. CWL read-only commands use `/cwl`, `/cwl-war`, and `/cwl-missed`, fetching CWL data live from the Clash API without changing regular war reminder behavior.
+`clashcommand/bot.py` registers Discord slash commands. Regular war commands use `/war` and `/missed`. CWL commands use `/cwl`, `/cwl-war`, and `/cwl-missed`, fetching CWL data live from the Clash API. CWL recap posting and reminders run in separate schedulers (`cwl_post_war_reports.py`, `cwl_reminders.py`) and do not change regular war reminder behavior.
 
-`clashcommand/post_war_reports.py` watches `data/war_results/final_war_*.json` from inside the Discord bot process and posts regular-war recaps to the configured reminder channel. It marks existing snapshots as seen on startup so deploying the bot does not spam old wars.
+`clashcommand/post_war_reports.py` watches `data/war_results/final_war_*.json` from inside the Discord bot process and posts regular-war recaps to the configured reminder channel. It marks existing snapshots as seen on startup so deploying the bot does not spam old wars. For new snapshots, it only marks a war seen after at least one Discord recap send succeeds or SQLite already has a `post_war_report` event.
+
+`clashcommand/clash/cwl.py` holds the pure CWL data helpers (side resolution, war-tag filtering, attack summaries, participation check, and the stable CWL war key). It is shared by `bot.py` and both CWL schedulers so the schedulers do not import the Discord bot module. Because a clan can appear on either the `clan` or `opponent` side of a CWL war, these helpers always resolve the clan by tag on both sides, and they default to one attack per member because the Clash API omits `attacksPerMember` for CWL.
+
+`clashcommand/cwl_post_war_reports.py` watches `data/cwl_war_results/cwl_war_*.json` and posts CWL round recaps. It mirrors the regular post-war reporter (startup seen-marking, retry-safe seen-marking, five-minute scan) with two CWL differences: it dedupes on the CWL war tag with reminder type `cwl_post_war_report`, and it posts a snapshot to a guild only when that guild's clan participates in the war, because CWL snapshots include every ended war in the league group, not just this clan's.
+
+`clashcommand/cwl_reminders.py` runs Discord reminder checks for the active CWL round. It fetches the league group live, selects the clan's single `inWar` round war, and reuses the regular reminder decision logic (3-hour and 1-hour windows). CWL reminder events are namespaced (`cwl_3h`, `cwl_1h`) so they never collide with regular reminders, and linked players are mentioned by player tag.
 
 `war_warning_message.py` fetches the live current war and prints a copy/paste reminder for members with attacks remaining. It does not store data or send notifications.
+
+`clashcommand/reminders.py` runs Discord war reminder checks. It uses the configured reminder channel, records sent reminders in SQLite, and logs explicit skip reasons such as no configured channel, war not `inWar`, no parseable end time, no stable war key, or already-sent dedupe.
 
 `weekly_report.py` reads saved final snapshots from `data/war_results/` and builds weekly and all-time historical reports. These reports include full roster tables with member attacks, stars, and average attack destruction. It does not call the Clash API for saved-snapshot reporting.
 
 `fetch_current_war_snapshot.py` refreshes `data/current_war/latest_current_war.json` from the Clash API for current-war site generation.
 
-`build_site.py` generates static HTML under `site_output/` for Cloudflare Pages. By default it writes the weekly report and total history pages. With `--include-current-war`, it writes a static current-war dashboard from `data/current_war/latest_current_war.json`. With `--live-current-war-fallback`, it can call the live API if that snapshot is unavailable.
+`build_site.py` generates static HTML under `site_output/` for Cloudflare Pages. By default it writes the weekly report and total history pages. With `--include-current-war`, it writes a static current-war dashboard. With `--live-current-war-fallback`, it fetches the live Clash API current war first, saves `data/current_war/latest_current_war.json`, then renders `site_output/current-war.html`; if the live fetch fails, it falls back to the cached snapshot. The build also writes `site_output/_headers` so Cloudflare Pages sends no-cache headers for `/current-war.html`.
 
 `deploy.sh` is the one-time local deploy command. It rebuilds the full static site with current-war data, stages only `site_output/`, commits if generated output changed, and pushes normally to GitHub.
 
@@ -95,6 +103,14 @@ site_output/index.html
    v
 GitHub -> Cloudflare Pages
 
+data/war_results/final_war_*.json
+   |
+   v
+post_war_reports.py scan loop
+   |
+   v
+Discord recap post
+
 Clash API CWL league group
    |
    v
@@ -104,6 +120,20 @@ schedule_cwl_snapshot.py
    |
    v
 data/cwl_war_results/              CWL final war snapshots
+   |
+   v
+cwl_post_war_reports.py scan loop  (participation filter, war-tag dedupe)
+   |
+   v
+Discord CWL round recap post
+
+Clash API CWL league group
+   |
+   v
+cwl_reminders.py                   active inWar round, 3h/1h windows
+   |
+   v
+Discord CWL reminder post
 
 data/war_results/
    |
@@ -151,7 +181,7 @@ Cloudflare Pages
 
 `fetch_war.py` owns Clash API authentication and request logic. Other live-data scripts import `fetch_current_war()` instead of duplicating request code.
 
-The scheduler imports both `fetch_current_war()` and `save_war_snapshot()`. It adds scheduling, dedupe, and final-result timing around those reusable helpers.
+The scheduler imports both `fetch_current_war()` and `save_war_snapshot()`. It adds scheduling, dedupe, persisted scheduled identity, and final-result timing around those reusable helpers.
 
 The CWL scheduler uses the same API token/clan tag environment behavior but calls CWL endpoints separately. It does not feed `weekly_report.py` or `build_site.py` yet.
 
@@ -161,13 +191,13 @@ The static site generator wraps the same weekly report logic in self-contained H
 
 The history page uses the same saved final snapshots but includes all deduped wars instead of the weekly report window. It derives all-time war totals, member accountability metrics, and full roster performance, then writes `site_output/history.html`.
 
-When `build_site.py --include-current-war` is used, `build_site.py` first loads `data/current_war/latest_current_war.json`. If `--live-current-war-fallback` is passed and the snapshot is unavailable, it calls `fetch_current_war()` once at build time. If current-war data is available, `site_output/current-war.html` contains the current state, timing, attack usage, remaining attacks, and a copy/paste warning message. If current-war data is unavailable, the page is still generated with an unavailable-data message.
+When `build_site.py --include-current-war --live-current-war-fallback` is used, `build_site.py` first calls `fetch_current_war()` from the Droplet's allowlisted IP, saves the result to `data/current_war/latest_current_war.json`, then renders `site_output/current-war.html`. If the live fetch fails, it loads `data/current_war/latest_current_war.json` as a fallback. If no current-war data is available, the page is still generated with an unavailable-data message.
 
-The production Droplet updater is `coc-report-updater.timer`, which runs `update_coc_report.sh` every 15 minutes. That script must call `build_site.py --include-current-war --live-current-war-fallback` so the current-war page can use the Droplet's allowlisted IP when `data/current_war/latest_current_war.json` is missing. Local deploy scripts are still available for manual operation. Deploy automation should only stage `site_output/`, so runtime data directories remain outside deploy commits.
+The production Droplet updater is `coc-report-updater.timer`, which runs `update_coc_report.sh` every 15 minutes. The script fetches `origin/main`, fast-forwards only when the branch is clean and behind, refuses dirty/divergent/locally-ahead states, builds with `--include-current-war --live-current-war-fallback`, stages `site_output/`, commits if generated output changed, and pushes normally. Local deploy scripts are still available for manual operation. Deploy automation should only stage `site_output/`, so runtime data directories remain outside deploy commits.
 
-Coc-war-snapshot writes completed regular-war JSON files. The bot's post-war reporter scans those files every five minutes, posts only newly detected wars after bot startup, and records sent recaps in SQLite using `reminder_events` with reminder type `post_war_report`.
+`coc-war-snapshot.service` writes completed regular-war JSON files. The bot's post-war reporter scans those files every five minutes, posts only newly detected wars after bot startup, and records sent recaps in SQLite using `reminder_events` with reminder type `post_war_report`. It uses the configured reminder channel, with a remembered command channel as an in-process fallback. New wars remain retryable when no recap channel exists, channel resolution fails, or Discord send fails.
 
-CWL reminders are intentionally not automated yet. Future CWL reminders should use separate reminder keys from regular wars and avoid duplicate reminder spam.
+CWL recaps and reminders are automated in the bot process alongside the regular-war schedulers. `coc-cwl-snapshot.service` writes completed CWL round JSON files, which the CWL post-war reporter scans every five minutes; it filters to wars the guild's clan participated in and dedupes on the CWL war tag with reminder type `cwl_post_war_report`. The CWL reminder scheduler polls the live league group for the active `inWar` round and reuses the regular 3-hour/1-hour decision logic, with reminder keys namespaced (`cwl_3h`, `cwl_1h`) to avoid colliding with regular-war reminders.
 
 Displayed site timestamps are formatted in Central Time using `ZoneInfo("America/Chicago")` when available, with a UTC fallback if Python cannot load zoneinfo.
 
@@ -183,6 +213,15 @@ Displayed site timestamps are formatted in Central Time using `ZoneInfo("America
 
 The final snapshot is taken after `endTime` plus a buffer because the API may need a short settlement window before final stars and destruction are stable.
 
+Final snapshot identity rules:
+
+- During `inWar`, the scheduler writes `data/state/scheduled_war.json` before sleeping to the final capture time.
+- When a scheduled final capture is due, `scheduled_war.json` is authoritative.
+- A live payload is saved only if its stable war key matches the scheduled key.
+- A live `notInWar` payload or identity-less payload uses the persisted scheduled payload.
+- A live next-war `preparation` or `inWar` payload is rejected for the prior scheduled war.
+- Duplicate protection still uses `data/state/saved_wars.json`.
+
 Manual snapshots and final snapshots are stored separately. `data/wars/` is useful for ad hoc inspection; `data/war_results/` is the historical source for reports.
 
 CWL snapshots are stored separately in `data/cwl_war_results/` with `_cwl` metadata. They should not be merged into weekly or overall reports until the desired reporting semantics are decided.
@@ -190,3 +229,32 @@ CWL snapshots are stored separately in `data/cwl_war_results/` with `_cwl` metad
 Warnings are generated as text instead of sent automatically because Clash chat tagging and notification behavior cannot be safely automated through this project.
 
 Static publishing is generated locally instead of built on Cloudflare. This keeps Cloudflare Pages setup simple: it only serves the committed `site_output/` folder.
+
+Cloudflare Pages reads `site_output/_headers`. The generated headers currently disable caching only for `/current-war.html` with `Cache-Control: no-cache, no-store, must-revalidate`; weekly and history pages keep normal static caching.
+
+## Runtime State Classification
+
+Canonical operational state:
+
+```text
+data/war_results/final_war_*.json
+data/cwl_war_results/cwl_war_*.json
+data/clashcommand.sqlite3, or CLASHCOMMAND_DB_PATH
+```
+
+Critical temporary state:
+
+```text
+data/state/scheduled_war.json
+```
+
+Cache and regenerable state:
+
+```text
+data/current_war/latest_current_war.json
+data/state/saved_wars.json
+data/state/saved_cwl_wars.json
+data/wars/
+```
+
+The SQLite DB stores linked Discord players, guild reminder channels, guild clan tags, reminder sends, and post-war recap dedupe events. The next operational improvement is a runtime-state backup script plus systemd timer that exports canonical state and the SQLite DB to an off-Droplet target, preferably Cloudflare R2.
