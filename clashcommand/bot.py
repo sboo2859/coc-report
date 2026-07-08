@@ -480,6 +480,7 @@ class ClashCommandBot(commands.Bot):
         self.post_war_report_scheduler.shutdown()
         self.cwl_reminder_scheduler.shutdown()
         self.cwl_post_war_report_scheduler.shutdown()
+        await asyncio.to_thread(self.linked_player_store.close)
         await super().close()
 
 

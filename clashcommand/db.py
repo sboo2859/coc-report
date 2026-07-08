@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import threading
 from datetime import datetime, timezone
 
 
@@ -10,18 +11,34 @@ def utc_now_text():
 class LinkedPlayerStore:
     def __init__(self, db_path):
         self.db_path = db_path
+        self._connection = None
+        # All access goes through asyncio.to_thread (a thread pool), so the
+        # single shared connection is opened with check_same_thread=False and
+        # every access is serialized under this lock.
+        self._lock = threading.Lock()
 
-    def connect(self):
-        directory = os.path.dirname(self.db_path)
-        if directory:
-            os.makedirs(directory, exist_ok=True)
+    def _connect(self):
+        # Callers must hold self._lock.
+        if self._connection is None:
+            directory = os.path.dirname(self.db_path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
 
-        connection = sqlite3.connect(self.db_path)
-        connection.row_factory = sqlite3.Row
-        return connection
+            connection = sqlite3.connect(self.db_path, check_same_thread=False)
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA journal_mode=WAL")
+            self._connection = connection
+        return self._connection
+
+    def close(self):
+        with self._lock:
+            if self._connection is not None:
+                self._connection.close()
+                self._connection = None
 
     def initialize(self):
-        with self.connect() as connection:
+        with self._lock:
+            connection = self._connect()
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS linked_players (
@@ -56,6 +73,7 @@ class LinkedPlayerStore:
                 )
                 """
             )
+            connection.commit()
 
     def ensure_linked_player_columns(self, connection):
         columns = {
@@ -67,7 +85,8 @@ class LinkedPlayerStore:
 
     def upsert_linked_player(self, guild_id, discord_user_id, coc_player_name, player_tag=None):
         now = utc_now_text()
-        with self.connect() as connection:
+        with self._lock:
+            connection = self._connect()
             connection.execute(
                 """
                 INSERT INTO linked_players (
@@ -87,9 +106,11 @@ class LinkedPlayerStore:
                 """,
                 (str(guild_id), str(discord_user_id), coc_player_name, player_tag, now, now),
             )
+            connection.commit()
 
     def linked_players_for_guild(self, guild_id):
-        with self.connect() as connection:
+        with self._lock:
+            connection = self._connect()
             rows = connection.execute(
                 """
                 SELECT discord_user_id, coc_player_name, player_tag
@@ -108,7 +129,8 @@ class LinkedPlayerStore:
         }
 
     def linked_player_rows_for_guild(self, guild_id):
-        with self.connect() as connection:
+        with self._lock:
+            connection = self._connect()
             rows = connection.execute(
                 """
                 SELECT discord_user_id, coc_player_name, player_tag
@@ -129,7 +151,8 @@ class LinkedPlayerStore:
         ]
 
     def has_reminder_event(self, guild_id, war_key, reminder_type):
-        with self.connect() as connection:
+        with self._lock:
+            connection = self._connect()
             row = connection.execute(
                 """
                 SELECT 1
@@ -145,7 +168,8 @@ class LinkedPlayerStore:
         return row is not None
 
     def reminder_types_for_war(self, guild_id, war_key):
-        with self.connect() as connection:
+        with self._lock:
+            connection = self._connect()
             rows = connection.execute(
                 """
                 SELECT reminder_type
@@ -159,7 +183,8 @@ class LinkedPlayerStore:
         return {row["reminder_type"] for row in rows}
 
     def record_reminder_event(self, guild_id, war_key, reminder_type):
-        with self.connect() as connection:
+        with self._lock:
+            connection = self._connect()
             connection.execute(
                 """
                 INSERT OR IGNORE INTO reminder_events (
@@ -172,9 +197,11 @@ class LinkedPlayerStore:
                 """,
                 (str(guild_id), war_key, reminder_type, utc_now_text()),
             )
+            connection.commit()
 
     def set_reminder_channel(self, guild_id, channel_id):
-        with self.connect() as connection:
+        with self._lock:
+            connection = self._connect()
             connection.execute(
                 """
                 INSERT INTO guild_settings (
@@ -188,9 +215,11 @@ class LinkedPlayerStore:
                 """,
                 (str(guild_id), str(channel_id)),
             )
+            connection.commit()
 
     def get_reminder_channel(self, guild_id):
-        with self.connect() as connection:
+        with self._lock:
+            connection = self._connect()
             row = connection.execute(
                 """
                 SELECT reminder_channel_id
@@ -205,7 +234,8 @@ class LinkedPlayerStore:
         return row["reminder_channel_id"]
 
     def reminder_channels(self):
-        with self.connect() as connection:
+        with self._lock:
+            connection = self._connect()
             rows = connection.execute(
                 """
                 SELECT guild_id, reminder_channel_id
@@ -220,8 +250,32 @@ class LinkedPlayerStore:
             for row in rows
         }
 
+    def guild_settings_map(self):
+        """Return {guild_id: {"channel_id": ..., "clan_tag": ...}} for all guilds.
+
+        One query so schedulers can resolve both the reminder channel and the
+        clan tag per cycle without a separate get_clan_tag call per guild.
+        """
+        with self._lock:
+            connection = self._connect()
+            rows = connection.execute(
+                """
+                SELECT guild_id, reminder_channel_id, clan_tag
+                FROM guild_settings
+                """
+            ).fetchall()
+
+        return {
+            row["guild_id"]: {
+                "channel_id": row["reminder_channel_id"],
+                "clan_tag": row["clan_tag"],
+            }
+            for row in rows
+        }
+
     def set_clan_tag(self, guild_id, clan_tag):
-        with self.connect() as connection:
+        with self._lock:
+            connection = self._connect()
             connection.execute(
                 """
                 INSERT INTO guild_settings (
@@ -235,9 +289,11 @@ class LinkedPlayerStore:
                 """,
                 (str(guild_id), clan_tag),
             )
+            connection.commit()
 
     def get_clan_tag(self, guild_id):
-        with self.connect() as connection:
+        with self._lock:
+            connection = self._connect()
             row = connection.execute(
                 """
                 SELECT clan_tag
