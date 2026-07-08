@@ -16,11 +16,13 @@ For recovery and operator commands, start with [CoC Report Runbook](docs/RUNBOOK
 
 Current Discord bot commands include regular war commands (`/war`, `/missed`, `/latest-war-recap`) and CWL visibility commands (`/cwl`, `/cwl-war`, `/cwl-missed`). The bot posts automatic regular-war recaps from new `data/war_results/final_war_*.json` snapshots and automatic CWL round recaps from new `data/cwl_war_results/cwl_war_*.json` snapshots. It also sends automatic pre-end reminders for both regular wars and active CWL rounds (3-hour and 1-hour windows).
 
-## Discord Bot Conversion
+## Discord Bot (ClashCommand)
 
-This project is being planned for conversion into **ClashCommand**, a Discord bot for war accountability and smart reminders. The existing script and static report flow should remain usable while reusable Clash API, war timing, missed-attack, and reporting logic is extracted into a bot-ready package.
+The **ClashCommand** Discord bot is built and running in production alongside the static report flow. It handles war accountability, automatic recaps, and smart reminders for regular wars and CWL.
 
-Planning docs:
+Scope decision: ClashCommand is intentionally a **single-clan tool** for this clan's own Discord server. Multi-server/multi-tenant distribution and paid features were evaluated and are **not being pursued** (charging fees is also prohibited by Supercell's Fan Content Policy). The planning docs below are retained as historical reference; their later multi-server and monetization phases are out of scope.
+
+Reference docs:
 
 - [Discord Bot Audit](docs/DISCORD_BOT_AUDIT.md)
 - [Discord Bot MVP Plan](docs/DISCORD_BOT_MVP_PLAN.md)
@@ -307,7 +309,7 @@ data/state/saved_cwl_wars.json
 data/wars/
 ```
 
-The SQLite DB stores linked players, guild reminder channel/clan settings, and reminder/post-war recap dedupe events. The next operational TODO is to add a runtime-state backup script plus systemd timer that exports canonical state and the SQLite DB to an off-Droplet target, preferably Cloudflare R2.
+The SQLite DB stores linked players, guild reminder channel/clan settings, and reminder/post-war recap dedupe events. It runs in WAL mode, so `data/clashcommand.sqlite3-wal` and `-shm` sidecar files may exist alongside it; a backup should checkpoint the DB (or use `sqlite3 .backup`) or copy all three files together. The next operational TODO is to add a runtime-state backup script plus systemd timer that exports canonical state and the SQLite DB to an off-Droplet target, preferably Cloudflare R2.
 
 ## Scheduler Settings
 
@@ -316,15 +318,20 @@ These environment variables are optional:
 ```bash
 export WAR_END_BUFFER_MINUTES=2
 export WAR_PREP_POLL_MINUTES=30
+export WAR_PREP_MAX_SLEEP_MINUTES=360
 export WAR_IDLE_POLL_MINUTES=60
 export WAR_ENDED_POLL_MINUTES=30
 export WAR_RESULTS_DIR=data/war_results
+export CWL_POLL_MINUTES=30
+export CWL_IDLE_POLL_MINUTES=360
 export WAR_WARNING_TARGET_HOURS=3
 export WAR_WARNING_INCLUDE_COUNTS=true
 export REPORT_DAYS=7
 ```
 
 Defaults are shown above.
+
+The war scheduler avoids needless Clash API polling: during `preparation` it sleeps until battle-day `startTime` (capped at `WAR_PREP_MAX_SLEEP_MINUTES`, falling back to `WAR_PREP_POLL_MINUTES` when `startTime` is unavailable), and after a final `warEnded` snapshot is saved it backs off to `WAR_IDLE_POLL_MINUTES`. The CWL scheduler polls every `CWL_POLL_MINUTES` while rounds are active and every `CWL_IDLE_POLL_MINUTES` when the league group is `notInWar` or `ended`.
 
 ## Run Detached
 

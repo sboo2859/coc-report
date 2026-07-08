@@ -97,6 +97,27 @@ attack.stars
 
 `schedule_cwl_snapshot.py` uses CWL league group `state`, `season`, and `rounds[].warTags`, then saves raw CWL war responses with an added `_cwl` metadata object containing `warTag`, `season`, `round`, and `capturedAt`.
 
+## SQLite Database
+
+The Discord bot uses a SQLite database (`data/clashcommand.sqlite3`, or `CLASHCOMMAND_DB_PATH`) in WAL mode. Tables:
+
+```text
+linked_players    (guild_id, discord_user_id) -> coc_player_name, player_tag
+guild_settings    guild_id -> reminder_channel_id, clan_tag
+reminder_events   (guild_id, war_key, reminder_type) -> sent_at
+```
+
+`reminder_events` is the dedupe ledger. `war_key` is the stable regular-war key (JSON of clan/opponent tags plus prep/start/end times) for regular wars, or the CWL `warTag` for CWL. `reminder_type` is a closed set of contract values:
+
+```text
+post_war_report        regular-war recap posted
+cwl_post_war_report    CWL round recap posted
+3h, 1h                 regular-war reminder sent
+cwl_3h, cwl_1h         CWL reminder sent
+```
+
+The CWL reminder keys are namespaced with a `cwl_` prefix so they never collide with regular-war reminders that might share a `war_key`.
+
 ## Derived Fields
 
 Remaining attacks:

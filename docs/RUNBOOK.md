@@ -487,7 +487,7 @@ Next operational TODO:
 
 - Add `scripts/backup_runtime_state.sh`.
 - Add `coc-runtime-backup.service` and `coc-runtime-backup.timer`.
-- Back up `data/war_results/`, `data/cwl_war_results/`, `data/state/`, and the SQLite DB.
+- Back up `data/war_results/`, `data/cwl_war_results/`, `data/state/`, and the SQLite DB. The DB runs in WAL mode, so use `sqlite3 <db> ".backup <dest>"` (or checkpoint first), or copy `clashcommand.sqlite3` together with its `-wal` and `-shm` sidecar files.
 - Upload backup archives off-Droplet, preferably to Cloudflare R2.
 - Document restore steps after the backup script exists.
 

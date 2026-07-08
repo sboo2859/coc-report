@@ -1,5 +1,7 @@
 # ClashCommand Discord Bot Audit
 
+> **Status (2026-07):** Historical planning document. The conversion described here is done — the bot is built and deployed. Sections on **multi-server isolation, Postgres migration, and monetization-ready hooks are out of scope**: ClashCommand is a single-clan tool and will not be commercialized (see [Architecture Decisions](DECISIONS.md)).
+
 ## Executive Summary
 
 The current CoC Report project is a script and static-site reporting system. It already has useful domain logic for Clash API access, war timing, attack counting, missed-attack detection, final snapshot capture, weekly aggregation, and static HTML rendering.

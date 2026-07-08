@@ -1,8 +1,10 @@
 # ClashCommand MVP Implementation Plan
 
+> **Status (2026-07):** This plan is complete and historical. The bot is built and running in production (Phases 0–8), including CWL recaps and reminders added after the original plan. **Phase 9 (Monetization Hooks) and any multi-server distribution are intentionally not pursued** — ClashCommand is a single-clan tool, and Supercell's Fan Content Policy prohibits charging fees for a CoC-API product. See [Architecture Decisions](DECISIONS.md) and the Scope section of [System Architecture](SYSTEM_ARCHITECTURE.md).
+
 ## Goal
 
-Build ClashCommand as a Discord bot without breaking the current static report scripts. The MVP should support one clan per Discord server, use SQLite, run cleanly on a DigitalOcean Ubuntu droplet, and leave room for multi-server distribution and paid features.
+Build ClashCommand as a Discord bot without breaking the current static report scripts. The MVP should support one clan per Discord server, use SQLite, and run cleanly on a DigitalOcean Ubuntu droplet.
 
 ## Phase 0 - Repo Safety And Baseline
 
