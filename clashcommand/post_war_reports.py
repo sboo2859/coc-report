@@ -263,6 +263,7 @@ class PostWarReportScheduler:
         self.scheduler = None
         self.startup_time = datetime.now(timezone.utc)
         self.seen_war_keys = set()
+        self.seen_paths = set()
 
     def start(self):
         if self.scheduler and self.scheduler.running:
@@ -287,41 +288,58 @@ class PostWarReportScheduler:
             LOGGER.info("Stopped post-war report scheduler.")
 
     def mark_existing_wars_seen(self):
-        for _path, war in load_war_snapshots(self.data_dir):
-            key = stable_war_key(war)
-            if key:
-                self.seen_war_keys.add(key)
+        # Mark every snapshot present at startup as already handled without
+        # parsing it, so a deploy does not re-post old wars and later scans skip
+        # these files. Durable dedupe still lives in SQLite reminder_events.
+        paths = iter_war_snapshot_paths(self.data_dir)
+        self.seen_paths.update(paths)
         LOGGER.info(
-            "Post-war recap startup preload marked %s existing completed war(s) as seen: "
+            "Post-war recap startup preload marked %s existing snapshot file(s) as seen: "
             "reason=%s",
-            len(self.seen_war_keys),
+            len(paths),
             "historical snapshot anti-spam guard",
         )
 
-    async def check_completed_wars(self):
-        for path, war in load_war_snapshots(self.data_dir):
-            key = stable_war_key(war)
-            if not key:
-                LOGGER.warning("Skipping post-war recap for %s: no stable war key.", path)
-                continue
-
-            if key in self.seen_war_keys:
+    def collect_pending_snapshots(self):
+        # Runs off the event loop (via to_thread). Only opens/parses files that
+        # are new since startup and not yet handled; historical files are marked
+        # seen by path without being re-read every cycle.
+        pending = []
+        for path in iter_war_snapshot_paths(self.data_dir):
+            if path in self.seen_paths:
                 continue
 
             mtime = war_file_mtime(path)
             if mtime is not None and mtime < self.startup_time:
-                self.seen_war_keys.add(key)
-                LOGGER.info(
-                    "Post-war recap seen marker added: war_key=%s path=%s reason=%s",
-                    key,
-                    path,
-                    "snapshot predates scheduler startup",
-                )
+                self.seen_paths.add(path)
                 continue
 
+            try:
+                war = load_war_file(path)
+            except (OSError, json.JSONDecodeError) as exc:
+                LOGGER.warning("Skipping unreadable war snapshot %s: %s", path, exc)
+                continue
+
+            key = stable_war_key(war)
+            if not key:
+                LOGGER.warning("Skipping post-war recap for %s: no stable war key.", path)
+                self.seen_paths.add(path)
+                continue
+
+            if key in self.seen_war_keys:
+                self.seen_paths.add(path)
+                continue
+
+            pending.append((path, key, war))
+        return pending
+
+    async def check_completed_wars(self):
+        pending = await asyncio.to_thread(self.collect_pending_snapshots)
+        for path, key, war in pending:
             result = await self.post_war_to_configured_guilds(key, war)
             if result.should_mark_seen():
                 self.seen_war_keys.add(key)
+                self.seen_paths.add(path)
                 LOGGER.info(
                     "Post-war recap seen marker added: war_key=%s path=%s "
                     "sent_count=%s already_posted_count=%s skipped_count=%s "
@@ -348,9 +366,14 @@ class PostWarReportScheduler:
 
     async def post_war_to_configured_guilds(self, war_key, war):
         result = PostWarReportResult()
-        saved_channels = await asyncio.to_thread(
-            self.bot.linked_player_store.reminder_channels
+        settings_map = await asyncio.to_thread(
+            self.bot.linked_player_store.guild_settings_map
         )
+        saved_channels = {
+            guild_id: settings["channel_id"]
+            for guild_id, settings in settings_map.items()
+            if settings.get("channel_id")
+        }
         channel_by_guild = dict(self.bot.command_channels)
         channel_by_guild.update(saved_channels)
 
@@ -370,7 +393,7 @@ class PostWarReportScheduler:
         matched_guild = False
 
         for guild_id, channel_id in list(channel_by_guild.items()):
-            clan_tag = await self.clan_tag_for_guild(guild_id)
+            clan_tag = self.clan_tag_from_settings(guild_id, settings_map)
             if not clan_tag:
                 result.add_skip(f"guild {guild_id}: no clan configured")
                 LOGGER.info(
@@ -433,12 +456,9 @@ class PostWarReportScheduler:
 
         return result
 
-    async def clan_tag_for_guild(self, guild_id):
-        stored_clan_tag = await asyncio.to_thread(
-            self.bot.linked_player_store.get_clan_tag,
-            guild_id,
-        )
-        stored_clan_tag = normalize_clan_tag(stored_clan_tag)
+    def clan_tag_from_settings(self, guild_id, settings_map):
+        settings = settings_map.get(guild_id) or {}
+        stored_clan_tag = normalize_clan_tag(settings.get("clan_tag"))
         if stored_clan_tag:
             return stored_clan_tag
 

@@ -141,9 +141,14 @@ class WarReminderScheduler:
 
     async def check_current_war(self):
         LOGGER.info("War reminder check started.")
-        saved_channels = await asyncio.to_thread(
-            self.bot.linked_player_store.reminder_channels
+        settings_map = await asyncio.to_thread(
+            self.bot.linked_player_store.guild_settings_map
         )
+        saved_channels = {
+            guild_id: settings["channel_id"]
+            for guild_id, settings in settings_map.items()
+            if settings.get("channel_id")
+        }
         channel_by_guild = dict(self.bot.command_channels)
         channel_by_guild.update(saved_channels)
 
@@ -172,7 +177,7 @@ class WarReminderScheduler:
             return
 
         for guild_id, channel_id in list(channel_by_guild.items()):
-            clan_tag = await self.clan_tag_for_guild(guild_id)
+            clan_tag = self.clan_tag_from_settings(guild_id, settings_map)
             if not clan_tag:
                 LOGGER.info(
                     "War reminder evaluation skipped: guild_id=%s clan_tag=%s "
@@ -317,12 +322,9 @@ class WarReminderScheduler:
                 war,
             )
 
-    async def clan_tag_for_guild(self, guild_id):
-        stored_clan_tag = await asyncio.to_thread(
-            self.bot.linked_player_store.get_clan_tag,
-            guild_id,
-        )
-        stored_clan_tag = normalize_clan_tag(stored_clan_tag)
+    def clan_tag_from_settings(self, guild_id, settings_map):
+        settings = settings_map.get(guild_id) or {}
+        stored_clan_tag = normalize_clan_tag(settings.get("clan_tag"))
         if stored_clan_tag:
             return stored_clan_tag
 

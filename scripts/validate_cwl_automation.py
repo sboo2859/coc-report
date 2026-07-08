@@ -35,6 +35,7 @@ from clashcommand.cwl_post_war_reports import (
     cwl_result_label,
 )
 from clashcommand.cwl_reminders import (
+    CwlReminderScheduler,
     base_reminder_keys,
     build_cwl_reminder_message,
     cwl_reminder_type,
@@ -156,6 +157,12 @@ class FakeStore:
     def reminder_channels(self):
         return dict(self._channels)
 
+    def guild_settings_map(self):
+        return {
+            guild_id: {"channel_id": channel_id, "clan_tag": self._clan_tag}
+            for guild_id, channel_id in self._channels.items()
+        }
+
     def get_clan_tag(self, guild_id):
         return self._clan_tag
 
@@ -261,16 +268,107 @@ def validate_scan_retries_on_send_failure():
 
 def validate_startup_preload_marks_seen():
     with tempfile.TemporaryDirectory() as tmp:
-        write_snapshot(tmp, load_fixture())
+        path = write_snapshot(tmp, load_fixture())
         channel = FakeChannel()
         store = FakeStore()
         scheduler = CwlPostWarReportScheduler(FakeBot(store, channel), data_dir=str(tmp))
-        # Startup preload should mark existing snapshots seen (anti-spam on deploy).
+        # Startup preload marks existing snapshot files seen by path (no parse),
+        # so a mid-season deploy does not re-post ended rounds.
         scheduler.mark_existing_wars_seen()
-        assert "#WAR12345" in scheduler.seen_war_keys
+        assert str(path) in scheduler.seen_paths
 
         asyncio.run(scheduler.check_completed_wars())
         assert channel.messages == []
+
+
+def validate_scan_skips_pre_startup_files_without_parsing():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write_snapshot(tmp, load_fixture())
+        # Backdate the file so it predates the scheduler's startup_time.
+        old = 946684800  # 2000-01-01 UTC
+        os.utime(path, (old, old))
+        channel = FakeChannel()
+        store = FakeStore()
+        # startup_time defaults to "now" at construction -> file is historical.
+        scheduler = CwlPostWarReportScheduler(FakeBot(store, channel), data_dir=str(tmp))
+        pending = scheduler.collect_pending_snapshots()
+        assert pending == []
+        assert str(path) in scheduler.seen_paths
+        asyncio.run(scheduler.check_completed_wars())
+        assert channel.messages == []
+
+
+class FakeClashClient:
+    def __init__(self, group, wars):
+        self._group = group
+        self._wars = wars
+        self.group_calls = 0
+        self.war_calls = 0
+
+    def reset_counts(self):
+        self.group_calls = 0
+        self.war_calls = 0
+
+    def get_cwl_league_group(self, clan_tag):
+        self.group_calls += 1
+        return self._group
+
+    def get_cwl_war(self, war_tag):
+        self.war_calls += 1
+        return self._wars[war_tag]
+
+
+class ReminderFakeBot:
+    def __init__(self, clash_client):
+        self.clash_client = clash_client
+        self.command_channels = {}
+        self.settings = FakeSettings()
+
+
+def validate_reminder_round_cache():
+    # Round 1 ended (our clan in #w1a); round 2 active (our clan on the OPPONENT
+    # side of #w2a); round 3 not yet matched (#0 placeholders).
+    group = {
+        "state": "inWar",
+        "rounds": [
+            {"warTags": ["#w1a", "#w1b"]},
+            {"warTags": ["#w2a", "#w2b"]},
+            {"warTags": ["#0", "#0"]},
+        ],
+    }
+    wars = {
+        "#w1a": {"state": "warEnded", "clan": {"tag": "#OURCLAN"}, "opponent": {"tag": "#E1"}},
+        "#w1b": {"state": "warEnded", "clan": {"tag": "#X"}, "opponent": {"tag": "#Y"}},
+        "#w2a": {"state": "inWar", "clan": {"tag": "#Z"}, "opponent": {"tag": "#OURCLAN"}},
+        "#w2b": {"state": "inWar", "clan": {"tag": "#P"}, "opponent": {"tag": "#Q"}},
+    }
+    client = FakeClashClient(group, wars)
+    scheduler = CwlReminderScheduler(ReminderFakeBot(client))
+
+    # First call: full scan. Round 1 -> fetch #w1a (ours, ended, stop round);
+    # Round 2 -> fetch #w2a (ours, inWar) -> cache + return. 1 group, 2 wars.
+    war = scheduler.active_cwl_war(OUR_CLAN)
+    assert war is wars["#w2a"]
+    assert cwl_war_side(war, OUR_CLAN)[0] == "opponent"
+    assert client.group_calls == 1
+    assert client.war_calls == 2, client.war_calls
+    assert scheduler._active_war_tag_by_clan[OUR_CLAN] == "#w2a"
+
+    # Second call: cache hit -> only the cached war is fetched, no group walk.
+    client.reset_counts()
+    war2 = scheduler.active_cwl_war(OUR_CLAN)
+    assert war2 is wars["#w2a"]
+    assert client.group_calls == 0
+    assert client.war_calls == 1
+
+    # Round 2 ends -> cached war no longer inWar -> invalidate + rescan finds no
+    # active round for us -> None, and the stale cache entry is cleared.
+    wars["#w2a"]["state"] = "warEnded"
+    client.reset_counts()
+    war3 = scheduler.active_cwl_war(OUR_CLAN)
+    assert war3 is None
+    assert client.group_calls == 1  # rescanned after cache miss
+    assert OUR_CLAN not in scheduler._active_war_tag_by_clan
 
 
 def main():
@@ -284,6 +382,8 @@ def main():
     validate_scan_skips_nonparticipant()
     validate_scan_retries_on_send_failure()
     validate_startup_preload_marks_seen()
+    validate_scan_skips_pre_startup_files_without_parsing()
+    validate_reminder_round_cache()
     print("CWL automation validation passed.")
 
 
