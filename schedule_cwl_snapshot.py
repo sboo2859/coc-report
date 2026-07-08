@@ -9,6 +9,9 @@ from fetch_war import fetch_current_league_group, fetch_cwl_war
 STATE_FILE = os.environ.get("CWL_STATE_FILE", "data/state/saved_cwl_wars.json")
 CWL_WAR_DIR = os.environ.get("CWL_RESULTS_DIR", "data/cwl_war_results")
 DEFAULT_CWL_POLL_MINUTES = 30
+# CWL only runs ~1 week/month; when the league group is notInWar or fully ended
+# there is nothing to capture, so poll far less often.
+DEFAULT_CWL_IDLE_POLL_MINUTES = 360
 
 
 def log(message):
@@ -124,14 +127,14 @@ def fetch_cwl_war_safely(war_tag):
 def capture_finished_cwl_wars(saved_wars):
     group = fetch_group_safely()
     if group is None:
-        return
+        return None
 
     state = group.get("state", "unknown")
     season = group.get("season")
     log(f"Current CWL league group state: {state}")
 
     if state == "notInWar":
-        return
+        return state
 
     for round_index, war_tag in iter_war_tags(group):
         if war_tag in saved_wars:
@@ -157,17 +160,25 @@ def capture_finished_cwl_wars(saved_wars):
         write_saved_cwl_wars(saved_wars)
         log(f"Saved CWL war snapshot: {filename}")
 
+    return state
+
 
 def run_scheduler():
     poll_minutes = env_minutes("CWL_POLL_MINUTES", DEFAULT_CWL_POLL_MINUTES)
+    idle_poll_minutes = env_minutes("CWL_IDLE_POLL_MINUTES", DEFAULT_CWL_IDLE_POLL_MINUTES)
     saved_wars = load_saved_cwl_wars()
 
     log("Starting CWL snapshot scheduler.")
-    log(f"CWL poll interval: {poll_minutes:g} minutes.")
+    log(f"CWL poll interval: {poll_minutes:g} minutes (idle: {idle_poll_minutes:g}).")
 
     while True:
-        capture_finished_cwl_wars(saved_wars)
-        sleep_minutes(poll_minutes)
+        state = capture_finished_cwl_wars(saved_wars)
+        # notInWar / ended: no active rounds to capture, so poll far less often.
+        # A fetch failure (None) uses the normal interval so it retries promptly.
+        if state in ("notInWar", "ended"):
+            sleep_minutes(idle_poll_minutes)
+        else:
+            sleep_minutes(poll_minutes)
 
 
 def main():
