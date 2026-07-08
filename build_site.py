@@ -9,7 +9,10 @@ from fetch_war import (
 )
 from weekly_report import (
     DEFAULT_SITE_OUTPUT_DIR,
+    DEFAULT_WAR_RESULTS_DIR,
+    generate_history_report_data,
     generate_weekly_report_data,
+    load_war_files,
     write_current_war_site,
     write_history_site,
     write_site,
@@ -89,7 +92,11 @@ def write_cloudflare_headers(output_dir=DEFAULT_SITE_OUTPUT_DIR):
 
 def main():
     args = parse_args()
-    report_data = generate_weekly_report_data()
+    # Load saved war snapshots once and derive both the weekly and history
+    # views from the same in-memory list instead of globbing/parsing the
+    # directory twice per build.
+    loaded_wars = load_war_files(DEFAULT_WAR_RESULTS_DIR)
+    report_data = generate_weekly_report_data(loaded_wars=loaded_wars)
     output_path = write_site(
         report_data["report_text"],
         report_data["days"],
@@ -97,7 +104,8 @@ def main():
     )
     print(f"Wrote static report site: {output_path}")
 
-    history_path = write_history_site()
+    history_data = generate_history_report_data(loaded_wars=loaded_wars)
+    history_path = write_history_site(report_data=history_data)
     print(f"Wrote total history site: {history_path}")
 
     headers_path = write_cloudflare_headers()
