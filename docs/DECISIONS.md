@@ -155,3 +155,30 @@ Tradeoffs:
 - Battle day now costs roughly 50 extra Clash API calls per war instead of two, which is negligible against the rate limit but is no longer a single long sleep.
 - A refused snapshot means that war is missing from history and the recap. The war is deliberately left out of `saved_wars.json` so a later `warEnded` payload can still recover it.
 - Recaps built from a fallback payload append a caveat line noting how long before war end the data was captured, so a near-final recap is not presented as authoritative.
+
+## Decision: Exclude `endTime` from the war identity key
+
+Reason:
+
+- The Clash API moves a war's `endTime` mid-war. Two production cases: 2026-06-16 shifted `20260616T151233Z` to `20260616T162437Z` (+72m), and 2026-07-31 shifted `20260731T210143Z` to `20260731T213339Z` (+32m). Both are the same war — clan tag, opponent tag, `preparationStartTime`, and `startTime` were byte-identical across the pair.
+- `war_key_fields` included `endTime`, so a shifted end time produced a second identity for one war. At the original `endTime + buffer` the scheduler fetched, saw a war key that no longer matched, treated the live payload as a different war, and fell back to the persisted payload — which was the battle-day-start capture with zero attacks. That published the "0-0 tie, everyone missed" recap. When the war truly ended, the new key was unseen, so a correct snapshot and a second recap followed ~30 minutes later.
+- `saved_wars.json` and `reminder_events` both carried the duplicate keys, confirming the split: two `post_war_report` rows for one war, 30 minutes apart.
+- Clan tag, opponent tag, `preparationStartTime`, and `startTime` are fixed when the war is matched. Two different wars cannot share them for one clan, so they are a sufficient and stable identity.
+- Excluding `endTime` also stabilizes everything else keyed on it: reminder dedupe (`3h`/`1h` could re-fire after a shift), the recap MVP ranking seed, and the bot's snapshot dedupe in `/war` history.
+
+Tradeoffs:
+
+- `data/state/saved_wars.json` keys change format. `load_saved_wars` migrates them in place on startup, so previously captured wars are not re-saved.
+- `reminder_events` rows are not migrated. A war in flight during the upgrade may re-send one reminder or recap; upgrading between wars avoids it.
+- Snapshots already saved under both identities remain on disk. `scripts/find_empty_war_snapshots.py` removes the zero-attack half of each pair.
+
+## Decision: Follow a moved `endTime` instead of snapshotting at the original one
+
+Reason:
+
+- With a stable identity the scheduler still has to decide what to do when it wakes at `endTime + buffer` and the war is not over. Saving then captures a war still being fought.
+- `track_scheduled_war` re-reads `endTime` from every refresh. When it moves, the scheduler adopts the new end time, reschedules its snapshot, and keeps tracking, so one war yields exactly one snapshot taken after it actually ended.
+
+Tradeoffs:
+
+- The scheduler now follows the API's end time wherever it goes, so a repeatedly extended war keeps it tracking. This is correct — the war really is still running — but the wait is no longer bounded by the end time first observed.

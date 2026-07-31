@@ -121,12 +121,16 @@ def current_war_overview(war):
 
 
 def war_key_fields(war):
+    # `endTime` is deliberately excluded: the Clash API moves it when a war is
+    # extended (observed twice, +32m and +72m, mid-war). Including it split one
+    # war into two identities, which produced a duplicate snapshot and a recap
+    # built from pre-battle data. Clan tag, opponent tag, preparationStartTime,
+    # and startTime are fixed when the war is matched and cannot collide.
     return {
         "clan_tag": war.get("clan", {}).get("tag"),
         "opponent_tag": war.get("opponent", {}).get("tag"),
         "preparationStartTime": war.get("preparationStartTime"),
         "startTime": war.get("startTime"),
-        "endTime": war.get("endTime"),
     }
 
 

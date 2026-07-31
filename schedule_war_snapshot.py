@@ -103,6 +103,22 @@ def sleep_minutes(minutes):
     time.sleep(seconds)
 
 
+def normalize_saved_war_key(key):
+    # Keys written before `endTime` was dropped from the war identity carry an
+    # extra endTime field. Rewrite them so previously saved wars still match and
+    # are not captured a second time.
+    try:
+        fields = json.loads(key)
+    except (TypeError, ValueError):
+        return key
+
+    if not isinstance(fields, dict) or "endTime" not in fields:
+        return key
+
+    fields.pop("endTime", None)
+    return json.dumps(fields, sort_keys=True, separators=(",", ":"))
+
+
 def load_saved_wars():
     if not os.path.exists(STATE_FILE):
         return set()
@@ -114,7 +130,17 @@ def load_saved_wars():
         log(f"Could not read saved war state: {exc}. Starting with empty state.")
         return set()
 
-    return set(state.get("saved_wars", []))
+    stored = state.get("saved_wars", [])
+    saved_wars = {normalize_saved_war_key(key) for key in stored}
+
+    if saved_wars != set(stored):
+        log(
+            "Migrated saved war keys to the endTime-independent format: "
+            f"before={len(set(stored))} after={len(saved_wars)}"
+        )
+        write_saved_wars(saved_wars)
+
+    return saved_wars
 
 
 def write_saved_wars(saved_wars):
@@ -419,78 +445,101 @@ def next_refresh_delay_seconds(now, end_time, snapshot_time, refresh):
     return max(0.0, min(cadence_seconds, seconds_to_snapshot))
 
 
+def payload_end_time(war):
+    end_time_text = (war or {}).get("endTime")
+    if not end_time_text:
+        return None
+    try:
+        return parse_coc_time(end_time_text)
+    except ValueError:
+        return None
+
+
 def track_scheduled_war(
-    scheduled_war, saved_wars, fallback_minutes, refresh, end_time, snapshot_time
+    scheduled_war,
+    saved_wars,
+    fallback_minutes,
+    buffer_minutes,
+    refresh,
+    end_time,
+    snapshot_time,
 ):
-    # Keeps refreshing the persisted payload until snapshot time. Without this,
-    # the fallback used when the API has already rolled over to the next war is
-    # whatever was captured at battle-day start: zero attacks, 0-0 stars.
+    # Follows one war from battle day to its final snapshot. Two things make
+    # this more than a sleep:
+    #   1. The persisted payload is the fallback when the live war no longer
+    #      matches, so it is refreshed as the war progresses. Left unrefreshed
+    #      it holds the battle-day-start capture: zero attacks, 0-0 stars.
+    #   2. The API moves `endTime` when a war is extended. Snapshotting at the
+    #      original end would capture a war that is still being fought, so the
+    #      new end time is adopted and tracking continues.
     key = scheduled_war.get("war_key")
 
     while True:
         now = datetime.now(timezone.utc)
-        if now >= snapshot_time:
-            break
-
-        delay = next_refresh_delay_seconds(now, end_time, snapshot_time, refresh)
-        log(
-            f"Tracking war until snapshot time: war_key={key} "
-            f"war_ends_in={format_duration((end_time - now).total_seconds())} "
-            f"next_check_in={format_duration(delay)}"
-        )
-        time.sleep(delay)
-        if datetime.now(timezone.utc) >= snapshot_time:
-            # Let the post-loop final fetch handle it instead of polling twice.
-            continue
+        if now < snapshot_time:
+            delay = next_refresh_delay_seconds(now, end_time, snapshot_time, refresh)
+            log(
+                f"Tracking war until snapshot time: war_key={key} "
+                f"war_ends_in={format_duration((end_time - now).total_seconds())} "
+                f"next_check_in={format_duration(delay)}"
+            )
+            time.sleep(delay)
 
         data = fetch_war_safely()
         if data is None:
+            if datetime.now(timezone.utc) >= snapshot_time:
+                # Past the snapshot and the API is unreachable. Leave the
+                # scheduled identity on disk so the next loop retries it.
+                sleep_minutes(fallback_minutes)
+                return
             # Keep the last good persisted payload and try again next cycle.
             continue
 
         live_key = war_key(data)
         live_state = data.get("state", "unknown")
 
-        if live_key == key:
-            scheduled_war = write_scheduled_war(data, key, end_time, snapshot_time)
+        if live_key != key:
             log(
-                f"Refreshed scheduled war payload: war_key={key} state={live_state} "
-                f"attacks_used={attacks_used(data)}"
+                "Live war payload no longer matches the scheduled war; saving the "
+                f"freshest captured payload. war_key={key} live_key={live_key} "
+                f"live_state={live_state}"
             )
-            if live_state == "warEnded":
-                log("War reported as ended; saving final snapshot now.")
-                save_final_snapshot(data, saved_wars, scheduled_war=scheduled_war)
-                return
-            continue
+            save_final_snapshot(data, saved_wars, scheduled_war=scheduled_war)
+            return
 
+        new_end_time = payload_end_time(data) or end_time
+        if new_end_time != end_time:
+            log(
+                f"War end time moved: war_key={key} "
+                f"previous_end={format_datetime(end_time)} "
+                f"new_end={format_datetime(new_end_time)} "
+                f"shift={format_duration(abs((new_end_time - end_time).total_seconds()))}"
+            )
+            end_time = new_end_time
+            snapshot_time = end_time + timedelta(minutes=buffer_minutes)
+            log(f"Rescheduled final snapshot for: {format_datetime(snapshot_time)}")
+
+        scheduled_war = write_scheduled_war(data, key, end_time, snapshot_time)
         log(
-            "Live war payload rolled over to a different war before snapshot time; "
-            f"saving the freshest captured payload. war_key={key} live_key={live_key} "
-            f"live_state={live_state}"
+            f"Refreshed scheduled war payload: war_key={key} state={live_state} "
+            f"attacks_used={attacks_used(data)}"
         )
-        save_final_snapshot(data, saved_wars, scheduled_war=scheduled_war)
-        return
 
-    final_data = fetch_war_safely()
-    if final_data is None:
-        # Leave the scheduled identity on disk so the next loop retries it.
-        sleep_minutes(fallback_minutes)
-        return
+        if live_state == "warEnded":
+            log("War reported as ended; saving final snapshot now.")
+            save_final_snapshot(data, saved_wars, scheduled_war=scheduled_war)
+            return
 
-    final_state = final_data.get("state", "unknown")
-    final_key = war_key(final_data)
-    keys_matched = final_key == key
-    log(
-        "Fetched scheduled final snapshot: "
-        f"api_state={final_state} scheduled_war_key={key} "
-        f"live_key={final_key} keys_matched={keys_matched} "
-        f"scheduled_end_time={scheduled_war.get('end_time')} "
-        f"persisted_identity_fallback={not keys_matched}"
-    )
-    save_final_snapshot(final_data, saved_wars, scheduled_war=scheduled_war)
+        if datetime.now(timezone.utc) >= snapshot_time:
+            log(
+                "Snapshot time reached; saving the live payload for this war. "
+                f"war_key={key} api_state={live_state}"
+            )
+            save_final_snapshot(data, saved_wars, scheduled_war=scheduled_war)
+            return
 
 
-def resolve_due_scheduled_war(saved_wars, fallback_minutes, refresh=None):
+def resolve_due_scheduled_war(saved_wars, fallback_minutes, buffer_minutes, refresh=None):
     scheduled_war = load_scheduled_war()
     if not scheduled_war:
         return False
@@ -512,6 +561,7 @@ def resolve_due_scheduled_war(saved_wars, fallback_minutes, refresh=None):
         scheduled_war,
         saved_wars,
         fallback_minutes,
+        buffer_minutes,
         refresh or refresh_config(),
         end_time or snapshot_time,
         snapshot_time,
@@ -558,6 +608,7 @@ def handle_in_war(data, saved_wars, buffer_minutes, fallback_minutes, refresh=No
         scheduled_war,
         saved_wars,
         fallback_minutes,
+        buffer_minutes,
         refresh or refresh_config(),
         end_time,
         snapshot_time,
@@ -620,7 +671,9 @@ def run_scheduler():
     )
 
     while True:
-        if resolve_due_scheduled_war(saved_wars, prep_poll_minutes, refresh=refresh):
+        if resolve_due_scheduled_war(
+            saved_wars, prep_poll_minutes, buffer_minutes, refresh=refresh
+        ):
             continue
 
         data = fetch_war_safely()

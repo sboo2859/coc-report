@@ -297,6 +297,59 @@ class FakeTime:
         FakeDatetime._current = FakeDatetime._current + timedelta(seconds=seconds)
 
 
+def validate_war_key_ignores_end_time():
+    """The Clash API moves endTime when a war is extended. Two payloads of the
+    same war must still share one identity (observed 2026-06-16 +72m and
+    2026-07-31 +32m, each producing a duplicate snapshot and a false recap)."""
+    original = sample_war()
+    extended = copy.deepcopy(original)
+    extended["state"] = "warEnded"
+    extended["endTime"] = coc_time(END_TIME + timedelta(minutes=32))
+
+    assert scheduler.war_key(original) == scheduler.war_key(extended)
+    # A genuinely different war still gets a different key.
+    assert scheduler.war_key(next_war_payload()) != scheduler.war_key(original)
+
+
+def validate_saved_war_key_migration():
+    """Keys written before endTime was dropped must still match, so previously
+    captured wars are not saved a second time."""
+    legacy = json.dumps(
+        {
+            "clan_tag": "#CLAN",
+            "endTime": "20260523T192229.000Z",
+            "opponent_tag": "#OPP",
+            "preparationStartTime": "20260522T192229.000Z",
+            "startTime": "20260522T202229.000Z",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    migrated = scheduler.normalize_saved_war_key(legacy)
+    assert "endTime" not in migrated
+    assert json.loads(migrated) == {
+        "clan_tag": "#CLAN",
+        "opponent_tag": "#OPP",
+        "preparationStartTime": "20260522T192229.000Z",
+        "startTime": "20260522T202229.000Z",
+    }
+    # Already-migrated and unparseable keys pass through untouched.
+    assert scheduler.normalize_saved_war_key(migrated) == migrated
+    assert scheduler.normalize_saved_war_key("not json") == "not json"
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        configure_scheduler(tmp_path)
+        with open(scheduler.STATE_FILE, "w") as f:
+            json.dump({"saved_wars": [legacy]}, f)
+
+        saved_wars = scheduler.load_saved_wars()
+        assert saved_wars == {migrated}
+        # The migration is persisted, not recomputed every start.
+        with open(scheduler.STATE_FILE) as f:
+            assert json.load(f)["saved_wars"] == [migrated]
+
+
 def run_tracking_loop(tmp_path, fetch_responses, battle_hours=24):
     """Drive track_scheduled_war from battle-day start through the final
     snapshot, returning the snapshots it saved."""
@@ -329,6 +382,7 @@ def run_tracking_loop(tmp_path, fetch_responses, battle_hours=24):
             scheduled_war,
             saved_wars,
             fallback_minutes=30,
+            buffer_minutes=2,
             refresh=scheduler.refresh_config(),
             end_time=end_time,
             snapshot_time=snapshot_time,
@@ -374,6 +428,42 @@ def validate_tracking_loop_keeps_fallback_fresh():
         assert "`2/4` used" in recap
 
 
+def validate_tracking_loop_follows_extended_end_time():
+    """Replays the 2026-07-31 incident: at the original endTime the war was not
+    over, the API had moved endTime out by 32 minutes, and the old code snapshot
+    the pre-battle payload and posted a 0-0 recap. One war must produce exactly
+    one snapshot, taken after it truly ended."""
+    def responses(now, original_end):
+        extended_end = original_end + timedelta(minutes=32)
+        if now >= extended_end:
+            war = same_war_ended_payload()
+        elif now >= original_end - timedelta(minutes=45):
+            war = fought_war()
+        else:
+            war = sample_war()
+
+        war["startTime"] = coc_time(original_end - timedelta(hours=24))
+        war["preparationStartTime"] = coc_time(original_end - timedelta(hours=47))
+        # The API reports the original end until the extension is applied.
+        war["endTime"] = coc_time(original_end if now < original_end else extended_end)
+        return war
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        payloads, key, saved_wars = run_tracking_loop(tmp_path, responses)
+
+        assert len(payloads) == 1, f"expected one snapshot, got {len(payloads)}"
+        saved_data = payloads[0]
+        assert saved_data["state"] == "warEnded", "snapshot taken before the war ended"
+        assert saved_data["_snapshot"]["attacksUsed"] == 2
+        assert key in saved_wars
+
+        recap = build_post_war_report(saved_data)
+        assert "**War Recap: Win**" in recap
+        assert "`5-3` stars" in recap
+        assert snapshot_freshness_note(saved_data) is None
+
+
 def validate_tracking_loop_refuses_when_api_is_down():
     """If the API is unreachable for all of battle day, the only payload on hand
     is the battle-day-start capture. Post nothing rather than a false recap."""
@@ -411,6 +501,8 @@ def validate_tracking_loop_saves_war_ended_immediately():
 
 
 def main():
+    validate_war_key_ignores_end_time()
+    validate_saved_war_key_migration()
     validate_stale_fallback_refused()
     validate_fresh_fallback_accepted()
     validate_live_same_war_ended_accepted()
@@ -418,6 +510,7 @@ def main():
     validate_preparation_payload_never_final()
     validate_refresh_cadence()
     validate_tracking_loop_keeps_fallback_fresh()
+    validate_tracking_loop_follows_extended_end_time()
     validate_tracking_loop_refuses_when_api_is_down()
     validate_tracking_loop_saves_war_ended_immediately()
     print("Scheduled war snapshot fallback validation passed.")

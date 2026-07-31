@@ -39,7 +39,11 @@ For `inWar`:
 
 The default buffer is 2 minutes. The buffer exists to avoid fetching at the exact war end moment, when final stars, destruction, and state may still be settling.
 
+Step 4 also re-reads `endTime` on every refresh. The Clash API extends a war's end time mid-war (observed +32m and +72m), so the snapshot target is rescheduled whenever it moves. Without this the scheduler would wake at the original end time and capture a war that is still being fought.
+
 The refresh loop exists because the Clash API serves only one current war per clan. If the clan is matched into a new war before the snapshot is taken, the old war's results are gone and the persisted payload is the only remaining source. Without refreshing, that payload is whatever was captured at battle-day start — zero attacks and 0-0 stars — which publishes a recap claiming a scoreless tie where everyone missed.
+
+The war identity used for dedupe is `clan.tag`, `opponent.tag`, `preparationStartTime`, and `startTime`. `endTime` is excluded because it moves; including it split one war into two identities and was the direct cause of the 0-0 recap.
 
 A payload is saved as a final snapshot only if it can plausibly be one:
 
