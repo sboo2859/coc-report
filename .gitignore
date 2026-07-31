@@ -20,6 +20,13 @@ __pycache__/
 *.sqlite
 *.sqlite3
 *.db
+# WAL mode creates -shm/-wal sidecars, which the patterns above do not match.
+# Left untracked they keep the working tree permanently dirty, and
+# update_coc_report.sh refuses to pull or push over a dirty tree.
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3-shm
+*.sqlite3-wal
 data/state/
 data/current_war/
 data/wars/
