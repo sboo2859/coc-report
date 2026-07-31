@@ -157,6 +157,26 @@ def perfect_attackers(war, limit=5):
     return players[:limit]
 
 
+def snapshot_freshness_note(war):
+    # Set by schedule_war_snapshot when the API had already rolled over to the
+    # next war and the recap had to come from the last payload captured while
+    # this war was live. Say so rather than presenting it as the final word.
+    metadata = war.get("_snapshot") or {}
+    if metadata.get("source") != "persisted":
+        return None
+
+    seconds = metadata.get("capturedBeforeEndSeconds")
+    if not isinstance(seconds, (int, float)) or seconds <= 60:
+        return "_Captured moments before the war ended; late attacks may be missing._"
+
+    minutes = int(round(seconds / 60))
+    label = "minute" if minutes == 1 else "minutes"
+    return (
+        f"_Captured {minutes} {label} before the war ended because the next war had "
+        "already started; late attacks may be missing._"
+    )
+
+
 def build_post_war_report(war, website_url=None):
     overview = current_war_overview(war)
     clan = overview["clan"]
@@ -212,6 +232,10 @@ def build_post_war_report(war, website_url=None):
     if performers:
         mvp = performers[0]
         lines.extend(["", f"**MVP:** {mvp['name']} with {mvp['stars']} stars."])
+
+    freshness_note = snapshot_freshness_note(war)
+    if freshness_note:
+        lines.extend(["", freshness_note])
 
     if website_url:
         lines.extend(["", f"Full report: {website_url}"])

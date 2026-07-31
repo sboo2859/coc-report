@@ -342,10 +342,23 @@ Role:
 - Runs `schedule_war_snapshot.py` continuously.
 - Watches the active war.
 - Persists scheduled war identity to `data/state/scheduled_war.json` before sleeping to war end.
-- Sleeps until war end plus buffer.
+- Refreshes that persisted payload through battle day (every `WAR_LIVE_REFRESH_MINUTES`, then every `WAR_FINAL_REFRESH_MINUTES` inside `WAR_FINAL_REFRESH_WINDOW_MINUTES` of the end) so the fallback is never a stale battle-day-start capture.
+- Saves as soon as a refresh reports `warEnded` for the same war.
 - Saves completed `final_war_*.json` files to `data/war_results/`.
 - Treats the scheduled war key as authoritative for due final captures.
 - Rejects live next-war payloads when completing a prior scheduled war.
+- Refuses to save a payload that cannot be a final result and logs `Refusing to save final war snapshot`, so no recap is posted instead of a false one.
+
+#### Recap reported a 0-0 tie with every attack missed
+
+The saved snapshot was captured before any attacks were logged. Find and remove the bad files, then rebuild the site so weekly/history reports drop them:
+
+```bash
+python scripts/find_empty_war_snapshots.py data/war_results
+python scripts/find_empty_war_snapshots.py data/war_results --delete
+```
+
+Check `journalctl -u coc-war-snapshot` around the war's end time for `snapshot_source=persisted` together with `attacks_used=0`, or for `Refusing to save final war snapshot`. The `_snapshot` block inside each `final_war_*.json` records which payload produced it.
 
 The repo includes a service template:
 

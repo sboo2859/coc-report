@@ -32,11 +32,22 @@ For `inWar`:
 
 1. Parse `endTime`.
 2. Calculate `endTime + WAR_END_BUFFER_MINUTES`.
-3. Sleep until that exact target time.
-4. Fetch the war again.
-5. Save the final snapshot if it has not already been saved.
+3. Persist the war identity and payload to `data/state/scheduled_war.json`.
+4. Track the war until that target time, re-fetching every `WAR_LIVE_REFRESH_MINUTES` and every `WAR_FINAL_REFRESH_MINUTES` once inside `WAR_FINAL_REFRESH_WINDOW_MINUTES` of `endTime`. Each fetch that still matches the scheduled war refreshes the persisted payload.
+5. If a refresh returns `warEnded` for the same war, save that payload immediately — it is the real result.
+6. Otherwise fetch once more at the target time and save the final snapshot if it has not already been saved.
 
 The default buffer is 2 minutes. The buffer exists to avoid fetching at the exact war end moment, when final stars, destruction, and state may still be settling.
+
+The refresh loop exists because the Clash API serves only one current war per clan. If the clan is matched into a new war before the snapshot is taken, the old war's results are gone and the persisted payload is the only remaining source. Without refreshing, that payload is whatever was captured at battle-day start — zero attacks and 0-0 stars — which publishes a recap claiming a scoreless tie where everyone missed.
+
+A payload is saved as a final snapshot only if it can plausibly be one:
+
+- its `state` is `warEnded` or `inWar` (a `preparation` or `notInWar` payload is never a result),
+- its war key matches the war being saved, and
+- if it is not `warEnded`, it was captured within `WAR_MAX_FALLBACK_STALENESS_MINUTES` of `endTime`.
+
+Otherwise the scheduler logs `Refusing to save final war snapshot`, clears the scheduled identity, and leaves the war out of `saved_wars.json` so a later `warEnded` payload can still recover it. No snapshot means no recap, which is preferred over an incorrect one.
 
 For `warEnded`:
 

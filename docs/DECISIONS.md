@@ -139,3 +139,19 @@ Reason:
 Tradeoffs:
 
 - Some code (e.g. `guild_settings`) is per-guild and could support more servers, but multi-tenant hardening and monetization are intentionally not built.
+
+## Decision: Track the war through battle day, and refuse stale final snapshots
+
+Reason:
+
+- The Clash API serves only one current war per clan. When the clan is matched into a new war before the final snapshot is taken, the finished war's results are unreachable, and `save_final_snapshot` falls back to the payload persisted in `data/state/scheduled_war.json`.
+- That payload used to be written once, at the moment battle day was first observed, so the fallback was a zero-attack, 0-0 snapshot. It produced a recap reporting a scoreless tie in which every player missed every attack.
+- Refreshing the persisted payload through battle day (every `WAR_LIVE_REFRESH_MINUTES`, tightening to `WAR_FINAL_REFRESH_MINUTES` inside `WAR_FINAL_REFRESH_WINDOW_MINUTES` of the end) makes the fallback minutes old instead of a day old.
+- Saving immediately on a matching `warEnded` refresh avoids the fallback entirely in the common case.
+- A payload that cannot describe a finished war (wrong state, wrong war key, or captured more than `WAR_MAX_FALLBACK_STALENESS_MINUTES` before `endTime`) is refused rather than saved: posting no recap is better than posting one that credits nobody.
+
+Tradeoffs:
+
+- Battle day now costs roughly 50 extra Clash API calls per war instead of two, which is negligible against the rate limit but is no longer a single long sleep.
+- A refused snapshot means that war is missing from history and the recap. The war is deliberately left out of `saved_wars.json` so a later `warEnded` payload can still recover it.
+- Recaps built from a fallback payload append a caveat line noting how long before war end the data was captured, so a near-final recap is not presented as authoritative.

@@ -36,6 +36,22 @@ site_output/history.html
 
 `site_output/history.html` is generated from all deduped saved final snapshots in `data/war_results/`. It is a static build artifact and does not call the Clash API.
 
+## Snapshot Provenance (`_snapshot`)
+
+Final war snapshots written by `schedule_war_snapshot.py` carry a `_snapshot` object alongside the raw API fields, mirroring the `_cwl` block on CWL snapshots. It records which payload produced the file so a wrong recap can be traced:
+
+```text
+_snapshot.source                     "live" (fetched as this war) or "persisted" (fallback payload)
+_snapshot.capturedAt                 ISO-8601 UTC time the payload was fetched
+_snapshot.savedAt                    ISO-8601 UTC time the file was written
+_snapshot.warEndTime                 ISO-8601 UTC war endTime
+_snapshot.capturedBeforeEndSeconds   how far ahead of war end the payload was captured (0 if after)
+_snapshot.liveState                  state of the live API payload at save time
+_snapshot.attacksUsed                attacks recorded in the saved payload
+```
+
+Consumers ignore unknown top-level keys, so `weekly_report.py` and `build_site.py` are unaffected. `clashcommand/post_war_reports.py` reads `_snapshot.source` and `_snapshot.capturedBeforeEndSeconds` to append a caveat line when a recap came from a fallback payload rather than a live final one.
+
 ## Fields Used From Clash War JSON
 
 Top-level fields:
@@ -87,7 +103,7 @@ attack.stars
 
 `fetch_war.py` can save any valid JSON response from the API, but its participation printout expects `clan.members`.
 
-`schedule_war_snapshot.py` uses `state` and `endTime` for timing. It uses `clan.tag`, `opponent.tag`, `preparationStartTime`, `startTime`, and `endTime` for final-save dedupe.
+`schedule_war_snapshot.py` uses `state` and `endTime` for timing. It uses `clan.tag`, `opponent.tag`, `preparationStartTime`, `startTime`, and `endTime` for final-save dedupe. It adds a `_snapshot` provenance object to every file it writes (see below).
 
 `war_warning_message.py` requires `state == "inWar"` before generating a reminder. It uses `endTime`, `attacksPerMember`, and `clan.members`.
 

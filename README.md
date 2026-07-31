@@ -321,6 +321,10 @@ export WAR_PREP_POLL_MINUTES=30
 export WAR_PREP_MAX_SLEEP_MINUTES=360
 export WAR_IDLE_POLL_MINUTES=60
 export WAR_ENDED_POLL_MINUTES=30
+export WAR_LIVE_REFRESH_MINUTES=30
+export WAR_FINAL_REFRESH_MINUTES=5
+export WAR_FINAL_REFRESH_WINDOW_MINUTES=60
+export WAR_MAX_FALLBACK_STALENESS_MINUTES=15
 export WAR_RESULTS_DIR=data/war_results
 export CWL_POLL_MINUTES=30
 export CWL_IDLE_POLL_MINUTES=360
@@ -332,6 +336,8 @@ export REPORT_DAYS=7
 Defaults are shown above.
 
 The war scheduler avoids needless Clash API polling: during `preparation` it sleeps until battle-day `startTime` (capped at `WAR_PREP_MAX_SLEEP_MINUTES`, falling back to `WAR_PREP_POLL_MINUTES` when `startTime` is unavailable), and after a final `warEnded` snapshot is saved it backs off to `WAR_IDLE_POLL_MINUTES`. The CWL scheduler polls every `CWL_POLL_MINUTES` while rounds are active and every `CWL_IDLE_POLL_MINUTES` when the league group is `notInWar` or `ended`.
+
+During battle day the scheduler re-fetches the war every `WAR_LIVE_REFRESH_MINUTES`, tightening to `WAR_FINAL_REFRESH_MINUTES` once the war is within `WAR_FINAL_REFRESH_WINDOW_MINUTES` of ending. This keeps the persisted fallback payload current, because the Clash API stops serving a war as soon as the clan is matched into the next one. If the only payload on hand was captured more than `WAR_MAX_FALLBACK_STALENESS_MINUTES` before `endTime`, no snapshot is saved and no recap is posted — a stale payload would report a 0-0 tie with every attack missed.
 
 ## Run Detached
 
