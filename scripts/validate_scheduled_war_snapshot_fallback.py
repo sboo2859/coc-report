@@ -428,6 +428,50 @@ def validate_tracking_loop_keeps_fallback_fresh():
         assert "`2/4` used" in recap
 
 
+def validate_vanished_war_uses_fresh_fallback():
+    """Replays the 2026-08-11 incident: two minutes after the war ended the API
+    returned a bare `notInWar` payload, so no war key could be built at all
+    (live_key=None). The recap must come from the last live capture, not from
+    the battle-day-start payload."""
+    vanished = {"state": "notInWar"}
+    assert scheduler.war_key(vanished) is None, "bare notInWar must yield no key"
+
+    # Stale capture: nothing worth publishing.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        configure_scheduler(tmp_path)
+        _war, key, scheduled_war = create_scheduled_war(
+            captured_before_end=timedelta(hours=24)
+        )
+        saved_wars = scheduler.load_saved_wars()
+        assert scheduler.save_final_snapshot(
+            vanished, saved_wars, scheduled_war=scheduled_war
+        ) is False
+        assert saved_payloads(tmp_path) == []
+
+    # Fresh capture: publish it, flagged with how old it is.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        configure_scheduler(tmp_path)
+        _war, key, scheduled_war = create_scheduled_war(
+            war=fought_war(), captured_before_end=timedelta(minutes=2)
+        )
+        saved_wars = scheduler.load_saved_wars()
+        assert scheduler.save_final_snapshot(
+            vanished, saved_wars, scheduled_war=scheduled_war
+        ) is True
+
+        payloads = saved_payloads(tmp_path)
+        assert len(payloads) == 1
+        assert payloads[0]["clan"]["stars"] == 5
+        assert payloads[0]["_snapshot"]["attacksUsed"] == 2
+        assert payloads[0]["_snapshot"]["liveState"] == "notInWar"
+
+        recap = build_post_war_report(payloads[0])
+        assert "**War Recap: Win**" in recap
+        assert "2 minutes before the war ended" in recap
+
+
 def validate_tracking_loop_follows_extended_end_time():
     """Replays the 2026-07-31 incident: at the original endTime the war was not
     over, the API had moved endTime out by 32 minutes, and the old code snapshot
@@ -510,6 +554,7 @@ def main():
     validate_preparation_payload_never_final()
     validate_refresh_cadence()
     validate_tracking_loop_keeps_fallback_fresh()
+    validate_vanished_war_uses_fresh_fallback()
     validate_tracking_loop_follows_extended_end_time()
     validate_tracking_loop_refuses_when_api_is_down()
     validate_tracking_loop_saves_war_ended_immediately()
