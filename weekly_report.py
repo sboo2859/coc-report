@@ -172,6 +172,9 @@ def player_record(stats, member):
             "last_donations": optional_number(member.get("donations")),
             "first_donations_received": optional_number(member.get("donationsReceived")),
             "last_donations_received": optional_number(member.get("donationsReceived")),
+            "in_clan": False,
+            "donation_delta": None,
+            "donation_received_delta": None,
             "wars_participated": 0,
             "possible_attacks": 0,
             "stars": 0,
@@ -210,7 +213,32 @@ def player_record(stats, member):
     return stats[tag]
 
 
-def aggregate_wars(wars):
+def seed_roster_from_clan_members(players, clan_members):
+    """Seed the roster from the live clan list before war data is folded in.
+
+    War snapshots only carry tag/name/townhallLevel/mapPosition/attacks, so
+    role, trophies, and donation counters can only come from the clan members
+    endpoint. Seeding first also means current members who did not war in the
+    reporting window still appear, and marks their record as in-clan.
+    """
+    for member in clan_members or []:
+        record = player_record(players, member)
+        record["in_clan"] = True
+    return players
+
+
+def apply_donation_deltas(players, deltas):
+    for record in players.values():
+        tag = normalize_player_tag(record.get("tag"))
+        delta = (deltas or {}).get(tag)
+        if not delta:
+            continue
+        record["donation_delta"] = delta.get("donations")
+        record["donation_received_delta"] = delta.get("received")
+    return players
+
+
+def aggregate_wars(wars, clan_members=None):
     totals = {
         "wars": 0,
         "wins": 0,
@@ -225,6 +253,9 @@ def aggregate_wars(wars):
         "players": {},
         "war_summaries": [],
     }
+
+    seed_roster_from_clan_members(totals["players"], clan_members)
+    totals["clan_member_count"] = len(clan_members or [])
 
     fallback_date = datetime.min.replace(tzinfo=timezone.utc)
     sorted_wars = sorted(wars, key=lambda item: war_start_time(item[1]) or fallback_date)
@@ -473,12 +504,19 @@ def log_roster_field_summary(label, totals):
     )
 
 
-def generate_weekly_report_data(days=None, data_dir=DEFAULT_WAR_RESULTS_DIR, loaded_wars=None):
+def generate_weekly_report_data(
+    days=None,
+    data_dir=DEFAULT_WAR_RESULTS_DIR,
+    loaded_wars=None,
+    clan_members=None,
+    donation_deltas=None,
+):
     report_days = days if days and days > 0 else env_int("REPORT_DAYS", DEFAULT_REPORT_DAYS)
     if loaded_wars is None:
         loaded_wars = load_war_files(data_dir)
     recent_wars = filter_recent_wars(loaded_wars, report_days)
-    totals = aggregate_wars(recent_wars)
+    totals = aggregate_wars(recent_wars, clan_members=clan_members)
+    apply_donation_deltas(totals["players"], donation_deltas)
     summary = report_summary(totals)
     log_roster_field_summary("Weekly report", totals)
 
@@ -492,11 +530,17 @@ def generate_weekly_report_data(days=None, data_dir=DEFAULT_WAR_RESULTS_DIR, loa
     }
 
 
-def generate_history_report_data(data_dir=DEFAULT_WAR_RESULTS_DIR, loaded_wars=None):
+def generate_history_report_data(
+    data_dir=DEFAULT_WAR_RESULTS_DIR,
+    loaded_wars=None,
+    clan_members=None,
+    donation_deltas=None,
+):
     if loaded_wars is None:
         loaded_wars = load_war_files(data_dir)
     history_wars = dedupe_wars(loaded_wars)
-    totals = aggregate_wars(history_wars)
+    totals = aggregate_wars(history_wars, clan_members=clan_members)
+    apply_donation_deltas(totals["players"], donation_deltas)
     summary = report_summary(totals)
     log_roster_field_summary("History report", totals)
 
@@ -611,12 +655,20 @@ def display_value(value):
     return str(value)
 
 
-def donation_delta(player, first_field, last_field):
-    first_value = player.get(first_field)
-    last_value = player.get(last_field)
-    if not isinstance(first_value, (int, float)) or not isinstance(last_value, (int, float)):
-        return "N/A"
-    return str(last_value - first_value)
+def render_delta(value):
+    # None means the sample series has no measured increment yet, which is not
+    # the same as a measured zero.
+    if not isinstance(value, (int, float)):
+        return "—"
+    return f"+{int(value)}" if value > 0 else str(int(value))
+
+
+def membership_label(player, clan_roster_known):
+    if player.get("in_clan"):
+        return text_or_default(player.get("role"), "Member")
+    if clan_roster_known:
+        return "Former member"
+    return "N/A"
 
 
 def player_average_stars(player):
@@ -633,24 +685,30 @@ def player_average_destruction(player):
     return f"{player.get('destruction', 0.0) / count:.1f}%"
 
 
-def render_roster_table(players):
+def render_roster_table(players, clan_roster_known=False):
     if not players:
         return '<p class="empty">No roster members found in tracked snapshots.</p>'
 
     rows = []
-    for player in sorted(players.values(), key=lambda item: item["name"].lower()):
+    # Current members first, then former members, each alphabetically.
+    ordered = sorted(
+        players.values(),
+        key=lambda item: (not item.get("in_clan"), item["name"].lower()),
+    )
+    for player in ordered:
+        row_class = "" if player.get("in_clan") or not clan_roster_known else ' class="former"'
         rows.append(
             f"""
-        <tr>
+        <tr{row_class}>
           <td>{html.escape(text_or_default(player.get("name")))}</td>
           <td>{html.escape(text_or_default(player.get("tag")))}</td>
-          <td>{html.escape(display_value(player.get("role")))}</td>
+          <td>{html.escape(membership_label(player, clan_roster_known))}</td>
           <td>{html.escape(display_value(player.get("town_hall")))}</td>
           <td>{html.escape(display_value(player.get("trophies")))}</td>
           <td>{html.escape(display_value(player.get("donations")))}</td>
           <td>{html.escape(display_value(player.get("donations_received")))}</td>
-          <td>{html.escape(donation_delta(player, "first_donations", "last_donations"))}</td>
-          <td>{html.escape(donation_delta(player, "first_donations_received", "last_donations_received"))}</td>
+          <td>{html.escape(render_delta(player.get("donation_delta")))}</td>
+          <td>{html.escape(render_delta(player.get("donation_received_delta")))}</td>
         </tr>"""
         )
 
@@ -666,8 +724,8 @@ def render_roster_table(players):
               <th>Trophies</th>
               <th>Donations</th>
               <th>Received</th>
-              <th>7-Day Donation Delta</th>
-              <th>7-Day Received Delta</th>
+              <th>Donated (7d)</th>
+              <th>Received (7d)</th>
             </tr>
           </thead>
           <tbody>{"".join(rows)}
@@ -986,6 +1044,9 @@ def render_site_styles():
       font-weight: 700;
       text-transform: uppercase;
     }
+    tr.former td {
+      color: var(--muted);
+    }
     .result {
       display: inline-flex;
       border-radius: 999px;
@@ -1089,7 +1150,16 @@ def build_report_html(report_text, days, generated_at=None, report_data=None):
         ),
         limit=10,
     )
-    roster_table = render_roster_table(report_data["totals"]["players"])
+    clan_member_count = report_data["totals"].get("clan_member_count") or 0
+    clan_roster_known = bool(clan_member_count)
+    roster_table = render_roster_table(
+        report_data["totals"]["players"], clan_roster_known=clan_roster_known
+    )
+    roster_kicker = (
+        f"{clan_member_count} current members, plus anyone who warred in this period"
+        if clan_roster_known
+        else "Clan roster unavailable; showing members found in war snapshots only"
+    )
     war_summary = render_war_summary_table(report_data["totals"]["war_summaries"])
     member_performance = render_member_war_performance(report_data["totals"]["players"])
     notes = render_notes(report_data["notes"])
@@ -1142,7 +1212,7 @@ def build_report_html(report_text, days, generated_at=None, report_data=None):
       <article class="card wide">
         <div class="section-head">
           <h2>Full Roster</h2>
-          <p class="section-kicker">Includes zero-attack members found in snapshots</p>
+          <p class="section-kicker">{roster_kicker}</p>
         </div>
         {roster_table}
       </article>

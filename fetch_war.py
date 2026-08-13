@@ -52,6 +52,26 @@ def fetch_current_war(api_token=None, clan_tag=None, timeout=20):
     return response.json(), response.status_code
 
 
+def fetch_clan_members(api_token=None, clan_tag=None, timeout=20):
+    """Current clan roster, including role, trophies, and donation counters.
+
+    War snapshots carry none of those fields, so this is the only source for
+    them. Delegates to ClashClient rather than repeating the endpoint.
+    """
+    from clashcommand.clash.client import ClashClient
+
+    api_token = api_token or get_api_token()
+    clan_tag = clan_tag or get_clan_tag()
+
+    if not api_token:
+        raise RuntimeError(
+            'Missing COC_API_TOKEN or CLASH_API_TOKEN environment variable. '
+            'Example: export COC_API_TOKEN="your Clash API token"'
+        )
+
+    return ClashClient(api_token, timeout=timeout).get_clan_members(clan_tag)
+
+
 def fetch_current_league_group(api_token=None, clan_tag=None, timeout=20):
     api_token = api_token or get_api_token()
     clan_tag = clan_tag or get_clan_tag()
