@@ -1,11 +1,19 @@
 import argparse
 import os
+from datetime import datetime, timezone
 
 from fetch_war import (
     DEFAULT_CURRENT_WAR_FILE,
+    fetch_clan_members,
     fetch_current_war,
     load_latest_current_war,
     save_latest_current_war,
+)
+from roster_samples import (
+    donation_deltas,
+    load_roster_samples,
+    record_clan_member_samples,
+    write_roster_samples,
 )
 from weekly_report import (
     DEFAULT_SITE_OUTPUT_DIR,
@@ -83,6 +91,39 @@ def fetch_current_war_for_site(output_path=None):
     return war
 
 
+def load_roster_for_site():
+    """Fetch the clan roster and fold today's reading into the sample series.
+
+    Returns (clan_members, donation_deltas). Both degrade to empty on any
+    failure so a site build never depends on the clan endpoint being reachable.
+    """
+    try:
+        members = fetch_clan_members()
+    except Exception as exc:
+        print(f"Clan roster unavailable ({exc}); roster columns will be limited.")
+        members = []
+
+    if not members:
+        return [], {}
+
+    print(f"Fetched clan roster for site: members={len(members)}.")
+
+    now = datetime.now(timezone.utc)
+    try:
+        samples = record_clan_member_samples(members, now=now, samples=load_roster_samples())
+        write_roster_samples(samples)
+        deltas = donation_deltas(samples, now=now)
+        print(
+            "Roster donation samples: "
+            f"tracked_players={len(samples)} players_with_7d_delta={len(deltas)}."
+        )
+    except OSError as exc:
+        print(f"Could not update roster donation samples ({exc}); skipping deltas.")
+        return members, {}
+
+    return members, deltas
+
+
 def write_cloudflare_headers(output_dir=DEFAULT_SITE_OUTPUT_DIR):
     output_path = os.path.join(output_dir, "_headers")
     with open(output_path, "w", encoding="utf-8") as f:
@@ -96,7 +137,10 @@ def main():
     # views from the same in-memory list instead of globbing/parsing the
     # directory twice per build.
     loaded_wars = load_war_files(DEFAULT_WAR_RESULTS_DIR)
-    report_data = generate_weekly_report_data(loaded_wars=loaded_wars)
+    clan_members, deltas = load_roster_for_site()
+    report_data = generate_weekly_report_data(
+        loaded_wars=loaded_wars, clan_members=clan_members, donation_deltas=deltas
+    )
     output_path = write_site(
         report_data["report_text"],
         report_data["days"],
@@ -104,7 +148,9 @@ def main():
     )
     print(f"Wrote static report site: {output_path}")
 
-    history_data = generate_history_report_data(loaded_wars=loaded_wars)
+    history_data = generate_history_report_data(
+        loaded_wars=loaded_wars, clan_members=clan_members, donation_deltas=deltas
+    )
     history_path = write_history_site(report_data=history_data)
     print(f"Wrote total history site: {history_path}")
 
