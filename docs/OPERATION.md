@@ -109,12 +109,18 @@ WAR_PREP_POLL_MINUTES=30
 WAR_PREP_MAX_SLEEP_MINUTES=360
 WAR_IDLE_POLL_MINUTES=60
 WAR_ENDED_POLL_MINUTES=30
+WAR_LIVE_REFRESH_MINUTES=30
+WAR_FINAL_REFRESH_MINUTES=5
+WAR_FINAL_REFRESH_WINDOW_MINUTES=60
+WAR_MAX_FALLBACK_STALENESS_MINUTES=15
 WAR_RESULTS_DIR=data/war_results
 CWL_POLL_MINUTES=30
 CWL_IDLE_POLL_MINUTES=360
 ```
 
 During `preparation` the war scheduler sleeps until battle-day `startTime` (capped at `WAR_PREP_MAX_SLEEP_MINUTES`), and backs off to `WAR_IDLE_POLL_MINUTES` once a `warEnded` snapshot is saved. The CWL scheduler polls every `CWL_IDLE_POLL_MINUTES` when the league group is `notInWar` or `ended`, otherwise every `CWL_POLL_MINUTES`.
+
+Through battle day the war scheduler refreshes the persisted scheduled-war payload every `WAR_LIVE_REFRESH_MINUTES`, and every `WAR_FINAL_REFRESH_MINUTES` once within `WAR_FINAL_REFRESH_WINDOW_MINUTES` of `endTime`. That payload is the fallback used when the clan has already been matched into the next war by snapshot time. A fallback captured more than `WAR_MAX_FALLBACK_STALENESS_MINUTES` before `endTime` is refused (logged as `Refusing to save final war snapshot`), so no recap is posted rather than a false one.
 
 Warning message:
 

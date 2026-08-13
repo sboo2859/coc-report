@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git fetch *)",
+      "Bash(ssh -o BatchMode=yes -o ConnectTimeout=10 root@68.183.101.125 'date -u; cd /opt/clashcommand/app && echo \"HEAD: $\\(git log --oneline -1\\)\"; echo \"dirty: [$\\(git status --porcelain | tr \"\\\\n\" \" \"\\)]\"; echo \"--- newest snapshots ---\"; ls -la data/war_results/ | tail -5')"
+    ]
+  }
+}

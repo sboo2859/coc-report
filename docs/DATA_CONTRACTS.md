@@ -36,6 +36,22 @@ site_output/history.html
 
 `site_output/history.html` is generated from all deduped saved final snapshots in `data/war_results/`. It is a static build artifact and does not call the Clash API.
 
+## Snapshot Provenance (`_snapshot`)
+
+Final war snapshots written by `schedule_war_snapshot.py` carry a `_snapshot` object alongside the raw API fields, mirroring the `_cwl` block on CWL snapshots. It records which payload produced the file so a wrong recap can be traced:
+
+```text
+_snapshot.source                     "live" (fetched as this war) or "persisted" (fallback payload)
+_snapshot.capturedAt                 ISO-8601 UTC time the payload was fetched
+_snapshot.savedAt                    ISO-8601 UTC time the file was written
+_snapshot.warEndTime                 ISO-8601 UTC war endTime
+_snapshot.capturedBeforeEndSeconds   how far ahead of war end the payload was captured (0 if after)
+_snapshot.liveState                  state of the live API payload at save time
+_snapshot.attacksUsed                attacks recorded in the saved payload
+```
+
+Consumers ignore unknown top-level keys, so `weekly_report.py` and `build_site.py` are unaffected. `clashcommand/post_war_reports.py` reads `_snapshot.source` and `_snapshot.capturedBeforeEndSeconds` to append a caveat line when a recap came from a fallback payload rather than a live final one.
+
 ## Fields Used From Clash War JSON
 
 Top-level fields:
@@ -87,7 +103,7 @@ attack.stars
 
 `fetch_war.py` can save any valid JSON response from the API, but its participation printout expects `clan.members`.
 
-`schedule_war_snapshot.py` uses `state` and `endTime` for timing. It uses `clan.tag`, `opponent.tag`, `preparationStartTime`, `startTime`, and `endTime` for final-save dedupe.
+`schedule_war_snapshot.py` uses `state` and `endTime` for timing. It uses `clan.tag`, `opponent.tag`, `preparationStartTime`, and `startTime` for final-save dedupe — `endTime` is deliberately **not** part of the war identity, because the Clash API moves it when a war is extended. It adds a `_snapshot` provenance object to every file it writes (see below).
 
 `war_warning_message.py` requires `state == "inWar"` before generating a reminder. It uses `endTime`, `attacksPerMember`, and `clan.members`.
 
@@ -109,7 +125,18 @@ guild_settings    guild_id -> reminder_channel_id, clan_tag
 reminder_events   (guild_id, war_key, reminder_type) -> sent_at
 ```
 
-`reminder_events` is the dedupe ledger. `war_key` is the stable regular-war key (JSON of clan/opponent tags plus prep/start/end times) for regular wars, or the CWL `warTag` for CWL. `reminder_type` is a closed set of contract values:
+`reminder_events` is the dedupe ledger. `war_key` is the stable regular-war key for regular wars, or the CWL `warTag` for CWL. The regular-war key is a compact sorted JSON object of exactly these fields:
+
+```text
+clan_tag
+opponent_tag
+preparationStartTime
+startTime
+```
+
+`endTime` is excluded on purpose. The Clash API extends a war's `endTime` mid-war (observed +32m and +72m), and including it split a single war into two identities — producing a duplicate snapshot, a duplicate recap, and a recap built from pre-battle data. The four fields above are fixed when the war is matched and cannot collide for one clan.
+
+Keys written before this change include an `endTime` field. `schedule_war_snapshot.py` migrates `data/state/saved_wars.json` in place on startup. Rows already in `reminder_events` are not migrated; a war in flight at upgrade time may re-send one reminder or recap, which is why the upgrade is best applied between wars. `reminder_type` is a closed set of contract values:
 
 ```text
 post_war_report        regular-war recap posted
