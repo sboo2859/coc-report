@@ -6,6 +6,7 @@ from fetch_war import (
     DEFAULT_CURRENT_WAR_FILE,
     fetch_clan_members,
     fetch_current_war,
+    fetch_war_log,
     load_latest_current_war,
     save_latest_current_war,
 )
@@ -14,6 +15,11 @@ from roster_samples import (
     load_roster_samples,
     record_clan_member_samples,
     write_roster_samples,
+)
+from war_log import (
+    load_cached_war_log,
+    merge_war_log_entries,
+    write_cached_war_log,
 )
 from weekly_report import (
     DEFAULT_SITE_OUTPUT_DIR,
@@ -124,6 +130,33 @@ def load_roster_for_site():
     return members, deltas
 
 
+def load_war_log_for_site():
+    """Merge the fetched war log into the cache and return every known entry.
+
+    The cache matters because the API only returns a recent window, while the
+    saved snapshots go back further and keep accumulating.
+    """
+    cached = load_cached_war_log()
+
+    try:
+        fetched = fetch_war_log()
+    except Exception as exc:
+        print(f"War log unavailable ({exc}); using {len(cached)} cached entries.")
+        return merge_war_log_entries(cached, [])
+
+    entries = merge_war_log_entries(cached, fetched)
+    try:
+        write_cached_war_log(entries)
+    except OSError as exc:
+        print(f"Could not cache war log ({exc}); continuing with fetched entries.")
+
+    print(
+        "Fetched clan war log: "
+        f"fetched={len(fetched)} regular_wars_known={len(entries)}."
+    )
+    return entries
+
+
 def write_cloudflare_headers(output_dir=DEFAULT_SITE_OUTPUT_DIR):
     output_path = os.path.join(output_dir, "_headers")
     with open(output_path, "w", encoding="utf-8") as f:
@@ -138,8 +171,12 @@ def main():
     # directory twice per build.
     loaded_wars = load_war_files(DEFAULT_WAR_RESULTS_DIR)
     clan_members, deltas = load_roster_for_site()
+    war_log_entries = load_war_log_for_site()
     report_data = generate_weekly_report_data(
-        loaded_wars=loaded_wars, clan_members=clan_members, donation_deltas=deltas
+        loaded_wars=loaded_wars,
+        clan_members=clan_members,
+        donation_deltas=deltas,
+        war_log_entries=war_log_entries,
     )
     output_path = write_site(
         report_data["report_text"],
@@ -149,7 +186,10 @@ def main():
     print(f"Wrote static report site: {output_path}")
 
     history_data = generate_history_report_data(
-        loaded_wars=loaded_wars, clan_members=clan_members, donation_deltas=deltas
+        loaded_wars=loaded_wars,
+        clan_members=clan_members,
+        donation_deltas=deltas,
+        war_log_entries=war_log_entries,
     )
     history_path = write_history_site(report_data=history_data)
     print(f"Wrote total history site: {history_path}")

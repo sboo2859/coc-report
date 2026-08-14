@@ -66,6 +66,20 @@ class ClashClient:
             return []
         return members
 
+    def get_war_log(self, clan_tag, limit=50):
+        import requests
+
+        encoded_clan_tag = quote(clan_tag, safe="")
+        url = f"{self.BASE_URL}/clans/{encoded_clan_tag}/warlog"
+        response = requests.get(
+            url, headers=self._headers(), params={"limit": limit}, timeout=self.timeout
+        )
+        data = self._json_or_raise(response)
+        entries = data.get("items", [])
+        if not isinstance(entries, list):
+            return []
+        return entries
+
     def get_player(self, player_tag):
         import requests
 
