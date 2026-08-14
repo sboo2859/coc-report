@@ -72,6 +72,27 @@ def fetch_clan_members(api_token=None, clan_tag=None, timeout=20):
     return ClashClient(api_token, timeout=timeout).get_clan_members(clan_tag)
 
 
+def fetch_war_log(api_token=None, clan_tag=None, limit=50, timeout=20):
+    """Final results for past wars, as recorded by Supercell.
+
+    This is the authoritative record of what a war ended as. A final snapshot
+    is only a reading taken shortly after `endTime`, so it can miss late
+    attacks, or miss the war entirely when the API drops it early.
+    """
+    from clashcommand.clash.client import ClashClient
+
+    api_token = api_token or get_api_token()
+    clan_tag = clan_tag or get_clan_tag()
+
+    if not api_token:
+        raise RuntimeError(
+            'Missing COC_API_TOKEN or CLASH_API_TOKEN environment variable. '
+            'Example: export COC_API_TOKEN="your Clash API token"'
+        )
+
+    return ClashClient(api_token, timeout=timeout).get_war_log(clan_tag, limit=limit)
+
+
 def fetch_current_league_group(api_token=None, clan_tag=None, timeout=20):
     api_token = api_token or get_api_token()
     clan_tag = clan_tag or get_clan_tag()

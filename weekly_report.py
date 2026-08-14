@@ -7,6 +7,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from schedule_war_snapshot import parse_coc_time
+from war_log import match_war_log_entry, reconcile_war, result_label
 from war_warning_message import pluralize_attack
 
 try:
@@ -238,7 +239,7 @@ def apply_donation_deltas(players, deltas):
     return players
 
 
-def aggregate_wars(wars, clan_members=None):
+def aggregate_wars(wars, clan_members=None, war_log_entries=None):
     totals = {
         "wars": 0,
         "wins": 0,
@@ -252,6 +253,10 @@ def aggregate_wars(wars, clan_members=None):
         "destruction_count": 0,
         "players": {},
         "war_summaries": [],
+        # Wars the log corrected, and wars whose snapshot held no usable
+        # per-member data. Surfaced in the report notes.
+        "war_log_corrections": 0,
+        "wars_without_member_data": [],
     }
 
     seed_roster_from_clan_members(totals["players"], clan_members)
@@ -265,69 +270,93 @@ def aggregate_wars(wars, clan_members=None):
 
         clan = war.get("clan", {})
         opponent = war.get("opponent", {})
-        clan_stars = safe_number(clan.get("stars"))
-        opponent_stars = safe_number(opponent.get("stars"))
 
-        if clan_stars > opponent_stars:
+        # Prefer Supercell's own record of how the war finished; the snapshot is
+        # only a reading taken shortly after endTime.
+        reconciled = reconcile_war(war, match_war_log_entry(war, war_log_entries))
+        members = clan.get("members", [])
+        if not isinstance(members, list):
+            members = []
+        attacks_allowed = get_attacks_allowed(war)
+
+        if reconciled:
+            clan_stars = reconciled["clan_stars"]
+            opponent_stars = reconciled["opponent_stars"]
+            clan_destruction = reconciled["clan_destruction"]
+            opponent_destruction = reconciled["opponent_destruction"]
+            war_used_attacks = reconciled["used_attacks"]
+            war_possible_attacks = reconciled["possible_attacks"]
+            team_size = reconciled["team_size"] or len(members)
+            result = result_label(reconciled["result"]) or war_result_label(war)
+            members_usable = reconciled["members_usable"]
+            if not reconciled["attacks_match"]:
+                totals["war_log_corrections"] += 1
+        else:
+            clan_stars = safe_number(clan.get("stars"))
+            opponent_stars = safe_number(opponent.get("stars"))
+            clan_destruction = clan.get("destructionPercentage")
+            opponent_destruction = opponent.get("destructionPercentage")
+            war_possible_attacks = len(members) * attacks_allowed
+            war_used_attacks = sum(len(member_attacks(m)) for m in members)
+            team_size = len(members)
+            result = war_result_label(war)
+            members_usable = True
+
+        if result == "Win":
             totals["wins"] += 1
-        elif clan_stars < opponent_stars:
+        elif result == "Loss":
             totals["losses"] += 1
         else:
             totals["ties"] += 1
 
-        destruction = clan.get("destructionPercentage")
-        if isinstance(destruction, (int, float)):
-            totals["destruction"] += float(destruction)
+        if isinstance(clan_destruction, (int, float)):
+            totals["destruction"] += float(clan_destruction)
             totals["destruction_count"] += 1
 
-        attacks_allowed = get_attacks_allowed(war)
+        totals["possible_attacks"] += war_possible_attacks
+        totals["used_attacks"] += war_used_attacks
+        totals["unused_attacks"] += max(0, war_possible_attacks - war_used_attacks)
 
-        members = clan.get("members", [])
-        if not isinstance(members, list):
-            members = []
+        if members_usable:
+            for member in members:
+                record = player_record(totals["players"], member)
+                attacks = member_attacks(member)
 
-        war_used_attacks = 0
-        war_possible_attacks = len(members) * attacks_allowed
+                used_attacks = len(attacks)
+                missed_attacks = max(0, attacks_allowed - used_attacks)
 
-        for member in members:
-            record = player_record(totals["players"], member)
-            attacks = member_attacks(member)
+                record["wars_participated"] += 1
+                record["possible_attacks"] += attacks_allowed
+                record["attacks_used"] += used_attacks
+                record["attacks_missed"] += missed_attacks
 
-            used_attacks = len(attacks)
-            missed_attacks = max(0, attacks_allowed - used_attacks)
-            war_used_attacks += used_attacks
-
-            totals["possible_attacks"] += attacks_allowed
-            totals["used_attacks"] += used_attacks
-            totals["unused_attacks"] += missed_attacks
-
-            record["wars_participated"] += 1
-            record["possible_attacks"] += attacks_allowed
-            record["attacks_used"] += used_attacks
-            record["attacks_missed"] += missed_attacks
-
-            for attack in attacks:
-                stars = safe_number(attack.get("stars"))
-                record["stars"] += stars
-                attack_destruction = attack.get("destructionPercentage")
-                if isinstance(attack_destruction, (int, float)):
-                    record["destruction"] += float(attack_destruction)
-                    record["destruction_count"] += 1
+                for attack in attacks:
+                    stars = safe_number(attack.get("stars"))
+                    record["stars"] += stars
+                    attack_destruction = attack.get("destructionPercentage")
+                    if isinstance(attack_destruction, (int, float)):
+                        record["destruction"] += float(attack_destruction)
+                        record["destruction_count"] += 1
+        else:
+            totals["wars_without_member_data"].append(
+                text_or_default(opponent.get("name"), "Opponent")
+            )
 
         totals["stars"] += clan_stars
         totals["war_summaries"].append(
             {
                 "date": format_war_date(war),
                 "opponent": text_or_default(opponent.get("name"), "Opponent"),
-                "result": war_result_label(war),
-                "team_size": len(members),
+                "result": result,
+                "team_size": team_size,
                 "clan_stars": clan_stars,
                 "opponent_stars": opponent_stars,
-                "clan_destruction": clan.get("destructionPercentage"),
-                "opponent_destruction": opponent.get("destructionPercentage"),
+                "clan_destruction": clan_destruction,
+                "opponent_destruction": opponent_destruction,
                 "attacks_used": war_used_attacks,
                 "possible_attacks": war_possible_attacks,
                 "missed_attacks": max(0, war_possible_attacks - war_used_attacks),
+                "member_data": members_usable,
             }
         )
 
@@ -402,6 +431,24 @@ def build_notes(totals, usage_percent):
         notes.append("A few repeat missed attacks to address")
     else:
         notes.append("No major missed-attack pattern this period")
+
+    # Totals come from the war log, per-player rows from snapshots. Say so when
+    # a war contributes to one but not the other, rather than letting the two
+    # quietly disagree.
+    missing = totals.get("wars_without_member_data") or []
+    if missing:
+        opponents = ", ".join(missing[:3])
+        extra = f" and {len(missing) - 3} more" if len(missing) > 3 else ""
+        notes.append(
+            f"{len(missing)} war(s) counted from the war log only, with no per-player "
+            f"breakdown available ({opponents}{extra})"
+        )
+
+    corrections = totals.get("war_log_corrections") or 0
+    if corrections:
+        notes.append(
+            f"{corrections} war(s) had final results corrected from the clan war log"
+        )
 
     return notes
 
@@ -510,12 +557,15 @@ def generate_weekly_report_data(
     loaded_wars=None,
     clan_members=None,
     donation_deltas=None,
+    war_log_entries=None,
 ):
     report_days = days if days and days > 0 else env_int("REPORT_DAYS", DEFAULT_REPORT_DAYS)
     if loaded_wars is None:
         loaded_wars = load_war_files(data_dir)
     recent_wars = filter_recent_wars(loaded_wars, report_days)
-    totals = aggregate_wars(recent_wars, clan_members=clan_members)
+    totals = aggregate_wars(
+        recent_wars, clan_members=clan_members, war_log_entries=war_log_entries
+    )
     apply_donation_deltas(totals["players"], donation_deltas)
     summary = report_summary(totals)
     log_roster_field_summary("Weekly report", totals)
@@ -535,11 +585,14 @@ def generate_history_report_data(
     loaded_wars=None,
     clan_members=None,
     donation_deltas=None,
+    war_log_entries=None,
 ):
     if loaded_wars is None:
         loaded_wars = load_war_files(data_dir)
     history_wars = dedupe_wars(loaded_wars)
-    totals = aggregate_wars(history_wars, clan_members=clan_members)
+    totals = aggregate_wars(
+        history_wars, clan_members=clan_members, war_log_entries=war_log_entries
+    )
     apply_donation_deltas(totals["players"], donation_deltas)
     summary = report_summary(totals)
     log_roster_field_summary("History report", totals)
